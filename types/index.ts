@@ -16,6 +16,7 @@ export interface Workspace {
   created_at: string;
   updated_at: string;
   topics_count?: number;
+  origin_analysis_id?: string;
 }
 
 export type TopicStatus = "draft" | "in_progress" | "completed";
@@ -42,6 +43,7 @@ export interface Reference {
   type: ReferenceType;
   raw_content?: string;
   summary?: string;
+  status?: "analyzed" | "processing" | "failed";
   created_at: string;
   updated_at: string;
 }
@@ -87,4 +89,30 @@ export interface Integration {
   active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface UrlAnalysis {
+  id: string;
+  url: string;
+  type: "youtube" | "reddit" | "github" | "generic";
+  title?: string;
+  creator?: string;
+  publish_date?: string;
+  duration?: string;
+  language?: string;
+  primary_topic?: string;
+  overview?: string[];
+  main_ideas?: { heading: string, explanation: string }[];
+  detailed_breakdown?: { section: string, content: string }[];
+  reading_time_saved?: string;
+  short_summary?: string;
+  key_takeaways?: string[];
+  timeline?: { timestamp: string, description: string }[];
+  important_quotes?: string[];
+  topics_covered?: string[];
+  people_mentioned?: string[];
+  technologies_mentioned?: string[];
+  resources_mentioned?: string[];
+  status?: "analyzed" | "processing" | "failed";
+  created_at: string;
 }
