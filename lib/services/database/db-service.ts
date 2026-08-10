@@ -92,36 +92,36 @@ export const dbService = {
     return DUMMY_WORKSPACES;
   },
 
-  async createWorkspace(title: string, description: string, origin_analysis_id?: string): Promise<Workspace> {
-    const newWs: Workspace = {
-      id: "ws-" + Math.random().toString(36).substr(2, 9),
-      user_id: "user-1",
-      title,
-      description,
-      is_pinned: false,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      topics_count: 0,
-      origin_analysis_id
-    };
+  async createWorkspace(
+    title: string,
+    description: string,
+    origin_analysis_id?: string
+  ): Promise<Workspace> {
 
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
         .from("workspaces")
-        .insert({ title, description, origin_analysis_id })
+        .insert({
+          title,
+          description,
+          origin_analysis_id,
+        })
         .select()
         .single();
-      if (!error && data) return data as Workspace;
+
+      console.log("CREATE WORKSPACE DATA:", data);
+      console.log("CREATE WORKSPACE ERROR:", error);
+
+      if (error) {
+        throw error;
+      }
+
+      if (data) {
+        return data as Workspace;
+      }
     }
 
-    if (isClient) {
-      const stored = localStorage.getItem(KEYS.WORKSPACES);
-      const workspaces = stored ? JSON.parse(stored) : [...DUMMY_WORKSPACES];
-      workspaces.unshift(newWs);
-      localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(workspaces));
-      notifyWorkspaceChange();
-    }
-    return newWs;
+    throw new Error("Supabase is not configured");
   },
 
   async renameWorkspace(id: string, newTitle: string): Promise<Workspace | null> {
@@ -276,35 +276,37 @@ export const dbService = {
     return DUMMY_TOPICS.filter(t => t.workspace_id === workspaceId);
   },
 
-  async createTopic(workspaceId: string, title: string, description: string): Promise<ResearchTopic> {
-    const newTopic: ResearchTopic = {
-      id: "topic-" + Math.random().toString(36).substr(2, 9),
-      workspace_id: workspaceId,
-      title,
-      description,
-      status: "draft",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      references_count: 0,
-      notes_count: 0
-    };
+  async createTopic(
+    workspaceId: string,
+    title: string,
+    description: string
+  ): Promise<ResearchTopic> {
 
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
         .from("research_topics")
-        .insert({ workspace_id: workspaceId, title, description, status: "draft" })
+        .insert({
+          workspace_id: workspaceId,
+          title,
+          description,
+          status: "draft",
+        })
         .select()
         .single();
-      if (!error && data) return data as ResearchTopic;
+
+      console.log("CREATE TOPIC DATA:", data);
+      console.log("CREATE TOPIC ERROR:", error);
+
+      if (error) {
+        throw error;
+      }
+
+      if (data) {
+        return data as ResearchTopic;
+      }
     }
 
-    if (isClient) {
-      const stored = localStorage.getItem(KEYS.TOPICS);
-      const topics = stored ? JSON.parse(stored) : [...DUMMY_TOPICS];
-      topics.unshift(newTopic);
-      localStorage.setItem(KEYS.TOPICS, JSON.stringify(topics));
-    }
-    return newTopic;
+    throw new Error("Supabase is not configured");
   },
 
   // REFERENCES
