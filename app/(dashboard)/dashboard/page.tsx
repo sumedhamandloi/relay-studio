@@ -33,12 +33,12 @@ export default function DashboardPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [pinnedWorkspaces, setPinnedWorkspaces] = useState<Workspace[]>([]);
   const [recentReferences, setRecentReferences] = useState<Reference[]>([]);
-  
+
   const [searchMode, setSearchMode] = useState<"research" | "analyze">("research");
   const [searchInput, setSearchInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
-  
+
   const [recentAnalyses, setRecentAnalyses] = useState<UrlAnalysis[]>([]);
   const [duplicateAnalysis, setDuplicateAnalysis] = useState<UrlAnalysis | null>(null);
 
@@ -90,37 +90,63 @@ export default function DashboardPage() {
   }
 
   async function loadData() {
-    const ws = await dbService.getWorkspaces();
-    setWorkspaces(ws);
-    setPinnedWorkspaces(ws.filter(w => w.is_pinned));
+    try {
+      const ws = await dbService.getWorkspaces();
 
-    // Load recent analyses immediately without waiting for references
-    dbService.getAnalyses().then(analyses => {
+      setWorkspaces(ws);
+      setPinnedWorkspaces(ws.filter(w => w.is_pinned));
+
+      const analyses = await dbService.getAnalyses();
       setRecentAnalyses(analyses.slice(0, 4));
-    });
 
-    // Load recent references from all topics in parallel
-    const topicsArrays = await Promise.all(ws.map(w => dbService.getTopics(w.id)));
-    const allTopics = topicsArrays.flat();
-    const refsArrays = await Promise.all(allTopics.map(t => dbService.getReferences(t.id)));
-    const allRefs = refsArrays.flat();
+      const topicsArrays = await Promise.all(
+        ws.map((w) => dbService.getTopics(w.id))
+      );
 
-    // Sort by created date desc and take top 4
-    allRefs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    setRecentReferences(allRefs.slice(0, 4));
+      const allTopics = topicsArrays.flat();
+
+      const refsArrays = await Promise.all(
+        allTopics.map((t) => dbService.getReferences(t.id))
+      );
+
+      const allRefs = refsArrays.flat();
+
+      allRefs.sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() -
+          new Date(a.created_at).getTime()
+      );
+
+      setRecentReferences(allRefs.slice(0, 4));
+    } catch (err) {
+      console.error("Dashboard load failed:", err);
+    }
   }
 
   async function handleCreateWorkspace() {
     const title = prompt("Enter workspace name:");
     if (!title?.trim()) return;
-    const newWs = await dbService.createWorkspace(title.trim(), "Newly created research hub.");
-    loadData();
-    router.push(`/workspace/${newWs.id}`);
-  }
 
+    try {
+      const newWs = await dbService.createWorkspace(
+        title.trim(),
+        "Newly created research hub."
+      );
+
+      await loadData();
+
+      router.push(`/workspace/${newWs.id}`);
+    } catch (err) {
+      console.error("Failed to create workspace:", err);
+    }
+  }
   async function handleTogglePin(id: string) {
-    await dbService.togglePinWorkspace(id);
-    loadData();
+    try {
+      await dbService.togglePinWorkspace(id);
+      await loadData();
+    } catch (err) {
+      console.error("Failed to toggle pin:", err);
+    }
   }
 
   const handleModeSwitch = (mode: "research" | "analyze") => {
@@ -140,17 +166,29 @@ export default function DashboardPage() {
     try {
       if (searchMode === "research") {
         const title = searchInput.trim();
-        
+
         if (workspaceCreationPreference === "always_new") {
-          const targetWs = await dbService.createWorkspace(title, "Automatically generated research workspace.");
-          const targetTopic = await dbService.createTopic(targetWs.id, title, "Primary research thread.");
-          
+          const targetWs = await dbService.createWorkspace(
+            title,
+            "Automatically generated research workspace."
+          );
+
+          const targetTopic = await dbService.createTopic(
+            targetWs.id,
+            title,
+            "Primary research thread."
+          );
+
+          await loadData();
+
           setSubmitStatus("Workspace created! Redirecting...");
           setSearchInput("");
+
           setTimeout(() => {
             setSubmitStatus(null);
-            loadData();
-            router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
+            router.push(
+              `/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`
+            );
           }, 800);
         } else {
           setResearchQuery(title);
@@ -160,7 +198,7 @@ export default function DashboardPage() {
       } else {
         const cleanUrl = searchInput.trim();
         const existing = await dbService.getAnalysisByUrl(cleanUrl);
-        
+
         if (existing) {
           setDuplicateAnalysis(existing);
           return;
@@ -229,7 +267,7 @@ export default function DashboardPage() {
       {/* Unified Search Section */}
       <div className="flex justify-center mb-6">
         <div className="w-full max-w-2xl bg-card/60 backdrop-blur-sm border border-border px-6 py-5 rounded-[var(--radius)] shadow-sm relative overflow-hidden">
-          
+
           {/* Segmented Toggle */}
           <div className="flex items-center justify-center mb-4">
             <div className="flex gap-4 relative">
@@ -299,7 +337,7 @@ export default function DashboardPage() {
                 )}
               </AnimatePresence>
             </div>
-            
+
             {/* Custom animated placeholder overlay */}
             {!searchInput && (
               <div className="absolute left-9 top-[11px] pointer-events-none flex items-center overflow-hidden text-muted-foreground/50 text-[13px]">
@@ -311,14 +349,14 @@ export default function DashboardPage() {
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.2 }}
                   >
-                    {searchMode === "research" 
-                      ? "Research AI Agents, System Design, Startups..." 
+                    {searchMode === "research"
+                      ? "Research AI Agents, System Design, Startups..."
                       : "Paste a YouTube, LinkedIn, X, Reddit or Instagram URL..."}
                   </motion.span>
                 </AnimatePresence>
               </div>
             )}
-            
+
             <input
               ref={inputRef}
               type={searchMode === "analyze" ? "url" : "text"}
@@ -346,7 +384,7 @@ export default function DashboardPage() {
                 </motion.span>
               </AnimatePresence>
             </Button>
-            
+
             {submitStatus && (
               <span className="absolute -bottom-5 left-4 text-[10px] font-medium text-primary">
                 {submitStatus}
@@ -369,20 +407,20 @@ export default function DashboardPage() {
                     <div className="flex-1">
                       <h3 className="text-sm font-bold text-foreground mb-1">You've already analyzed this source.</h3>
                       <p className="text-xs text-muted-foreground mb-4">
-                        Last analyzed: {new Date(duplicateAnalysis.created_at).toLocaleDateString()} at {new Date(duplicateAnalysis.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                        <br/>What would you like to do?
+                        Last analyzed: {new Date(duplicateAnalysis.created_at).toLocaleDateString()} at {new Date(duplicateAnalysis.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        <br />What would you like to do?
                       </p>
-                      
+
                       <div className="flex flex-col sm:flex-row gap-2">
-                        <Button 
-                          size="sm" 
+                        <Button
+                          size="sm"
                           className="bg-primary hover:bg-primary/90 text-[11px] font-semibold h-8"
                           onClick={() => router.push(`/analyze?url=${encodeURIComponent(duplicateAnalysis.url)}`)}
                         >
                           Open Existing Analysis
                         </Button>
-                        <Button 
-                          size="sm" 
+                        <Button
+                          size="sm"
                           variant="outline"
                           className="text-[11px] font-semibold h-8"
                           onClick={() => {
@@ -395,8 +433,8 @@ export default function DashboardPage() {
                         >
                           Refresh Analysis
                         </Button>
-                        <Button 
-                          size="sm" 
+                        <Button
+                          size="sm"
                           variant="ghost"
                           className="text-[11px] font-semibold h-8 text-muted-foreground hover:text-foreground"
                           onClick={() => router.push(`/analyze?url=${encodeURIComponent(duplicateAnalysis.url)}&expand=true`)}
@@ -464,7 +502,7 @@ export default function DashboardPage() {
 
       {/* References and Logs Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        
+
         {/* Recent Analyses */}
         <div className="bg-card border border-border rounded-[var(--radius)] p-5">
           <div className="flex items-center justify-between mb-4 border-b border-border/40 pb-2">
@@ -498,7 +536,7 @@ export default function DashboardPage() {
                     <span className="text-[10px] text-muted-foreground/60 font-medium">
                       {new Date(analysis.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                     </span>
-                    <button 
+                    <button
                       className="text-[10px] text-primary hover:underline font-semibold flex items-center gap-1"
                       onClick={() => router.push(`/analyze?url=${encodeURIComponent(analysis.url)}`)}
                     >
@@ -563,7 +601,7 @@ export default function DashboardPage() {
       <AnimatePresence>
         {isResearchModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -584,11 +622,11 @@ export default function DashboardPage() {
               </div>
 
               <div className="p-5 flex-1 overflow-y-auto space-y-6">
-                
+
                 {/* Option 1: Create New */}
                 <div>
                   <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Option 1</h4>
-                  <button 
+                  <button
                     onClick={handleCreateNewWorkspaceFromModal}
                     disabled={isCreatingResearch}
                     className="w-full flex items-center justify-between p-4 rounded-lg border border-border bg-card hover:border-primary/50 hover:bg-primary/5 transition-all text-left group"
@@ -609,10 +647,10 @@ export default function DashboardPage() {
                 {/* Option 2: Add to Existing */}
                 <div>
                   <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Option 2: Add to Existing Workspace</h4>
-                  
+
                   <div className="relative mb-3">
                     <Search className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground/60" />
-                    <input 
+                    <input
                       type="text"
                       placeholder="Search workspaces..."
                       value={wsSearchQuery}
@@ -644,20 +682,20 @@ export default function DashboardPage() {
                 </div>
 
               </div>
-              
+
               <div className="p-4 border-t border-border/50 bg-muted/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input 
-                    type="checkbox" 
+                  <input
+                    type="checkbox"
                     className="w-3.5 h-3.5 rounded border-border text-primary focus:ring-primary"
                     checked={workspaceCreationPreference === "always_new"}
                     onChange={(e) => handlePrefChange(e.target.checked ? "always_new" : "ask")}
                   />
                   <span className="text-[10px] font-medium text-muted-foreground">Always create a new workspace</span>
                 </label>
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setIsResearchModalOpen(false)}
                   disabled={isCreatingResearch}
                   className="h-8 text-xs font-semibold"
