@@ -75,7 +75,7 @@ export const dbService = {
         .order("updated_at", { ascending: false });
       if (!error && data) return data as Workspace[];
     }
-    
+
     // Fallback to local storage
     if (isClient) {
       const stored = localStorage.getItem(KEYS.WORKSPACES);
@@ -154,8 +154,19 @@ export const dbService = {
 
   async deleteWorkspace(id: string): Promise<boolean> {
     if (isSupabaseConfigured()) {
-      const { error } = await supabase.from("workspaces").delete().eq("id", id);
-      if (!error) return true;
+      const { data, error } = await supabase
+        .from("workspaces")
+        .delete()
+        .eq("id", id)
+        .select();
+
+      console.log("DELETE DATA:", data);
+      console.log("DELETE ERROR:", error);
+
+      if (!error) {
+        notifyWorkspaceChange();
+        return true;
+      }
     }
 
     if (isClient) {
@@ -184,7 +195,7 @@ export const dbService = {
           const r = JSON.parse(storedRefs) as Reference[];
           localStorage.setItem(KEYS.REFERENCES, JSON.stringify(r.filter(ref => !topicIds.includes(ref.topic_id))));
         }
-        
+
         const storedNotes = localStorage.getItem(KEYS.NOTES);
         if (storedNotes) {
           const n = JSON.parse(storedNotes) as ResearchNote[];
@@ -251,7 +262,7 @@ export const dbService = {
       if (stored) {
         const topics = JSON.parse(stored) as ResearchTopic[];
         const filtered = topics.filter(t => t.workspace_id === workspaceId);
-        
+
         const refs = JSON.parse(localStorage.getItem(KEYS.REFERENCES) || "[]") as Reference[];
         const notes = JSON.parse(localStorage.getItem(KEYS.NOTES) || "[]") as ResearchNote[];
 
@@ -300,7 +311,7 @@ export const dbService = {
   async getReferences(topicId: string): Promise<Reference[]> {
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
-        .from("references")
+        .from("research_references")
         .select("*")
         .eq("topic_id", topicId)
         .order("created_at", { ascending: false });
@@ -333,8 +344,14 @@ export const dbService = {
 
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
-        .from("references")
-        .insert({ topic_id: topicId, title, url, type, raw_content: rawContent, summary: newRef.summary })
+        .from("research_references")
+        .insert({
+          topic_id: topicId,
+          title,
+          url,
+          source_type: type,
+          notes: newRef.summary
+        })
         .select()
         .single();
       if (!error && data) return data as Reference;
@@ -345,7 +362,7 @@ export const dbService = {
       const references = stored ? JSON.parse(stored) : [...DUMMY_REFERENCES];
       references.unshift(newRef);
       localStorage.setItem(KEYS.REFERENCES, JSON.stringify(references));
-      
+
       // Touch topic update date
       this.touchTopic(topicId);
     }
@@ -382,7 +399,7 @@ export const dbService = {
         if (filtered.length > 0) return filtered;
       }
     }
-    
+
     const fallback = DUMMY_NOTES.filter(n => n.topic_id === topicId);
     if (fallback.length === 0 && isClient) {
       // Auto-create a note placeholder for editing if empty
@@ -594,7 +611,7 @@ export const dbService = {
       if (idx !== -1) {
         topics[idx].updated_at = new Date().toISOString();
         localStorage.setItem(KEYS.TOPICS, JSON.stringify(topics));
-        
+
         // Also touch workspace
         this.touchWorkspace(topics[idx].workspace_id);
       }
@@ -617,16 +634,44 @@ export const dbService = {
 
   // URL ANALYSES
   async getAnalyses(): Promise<UrlAnalysis[]> {
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("url_analyses")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!error && data) {
+        return data as UrlAnalysis[];
+      }
+
+      console.error("Error fetching analyses:", error);
+    }
+
+    // Temporary fallback
     if (isClient) {
       const stored = localStorage.getItem(KEYS.URL_ANALYSES);
       if (stored) {
         return JSON.parse(stored) as UrlAnalysis[];
       }
     }
+
     return [];
   },
 
   async getAnalysisByUrl(url: string): Promise<UrlAnalysis | null> {
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("url_analyses")
+        .select("*")
+        .eq("url", url)
+        .single();
+
+      if (!error && data) {
+        return data as UrlAnalysis;
+      }
+    }
+
+    // Temporary fallback
     const analyses = await this.getAnalyses();
     return analyses.find(a => a.url === url) || null;
   },
@@ -638,7 +683,7 @@ export const dbService = {
     // Generate mock intelligence data based on type
     const baseDomain = url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0];
     const generatedTitle = title || `${type === "youtube" ? "YouTube Video" : type === "reddit" ? "Reddit Discussion" : "Web Article"}: ${baseDomain}`;
-    
+
     let keyTakeaways = [
       "The primary thesis focuses on efficiency optimizations in modern frameworks.",
       "A new standard is proposed for handling distributed state.",
@@ -769,12 +814,32 @@ export const dbService = {
       created_at: new Date().toISOString()
     };
 
+    // Save to Supabase if configured
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("url_analyses")
+        .insert([newAnalysis])
+        .select()
+        .single();
+
+      if (!error && data) {
+        return data as UrlAnalysis;
+      }
+
+      console.log("SUPABASE ERROR:");
+      console.log(error);
+      console.log(JSON.stringify(error, null, 2));
+      console.error("Failed to save analysis:", error);
+    }
+
+    // Temporary fallback (until migration is complete)
     if (isClient) {
       const stored = localStorage.getItem(KEYS.URL_ANALYSES);
       const analyses = stored ? JSON.parse(stored) : [];
       analyses.unshift(newAnalysis);
       localStorage.setItem(KEYS.URL_ANALYSES, JSON.stringify(analyses));
     }
+
     return newAnalysis;
   }
 };
