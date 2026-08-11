@@ -29,7 +29,6 @@ import {
   Play,
   Pen
 } from "lucide-react";
-import { dbService } from "@/lib/services/database/db-service";
 import { Workspace } from "@/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -97,14 +96,23 @@ export function Sidebar() {
   }, []);
 
   async function loadWorkspaces() {
-    const data = await dbService.getWorkspaces();
-    setWorkspaces(data);
+    const res = await fetch("/api/workspaces");
+    if (res.ok) {
+      const data = await res.json();
+      setWorkspaces(data);
+    }
   }
 
   async function handleCreateWorkspace(e: React.FormEvent) {
     e.preventDefault();
     if (!newWsTitle.trim()) return;
-    const newWs = await dbService.createWorkspace(newWsTitle.trim(), "");
+    const res = await fetch("/api/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: newWsTitle.trim(), description: "" })
+    });
+    if (!res.ok) return;
+    const newWs = await res.json();
     setNewWsTitle("");
     setIsAddingWs(false);
     loadWorkspaces();
@@ -114,7 +122,15 @@ export function Sidebar() {
   async function handleTogglePin(e: React.MouseEvent, id: string) {
     e.preventDefault();
     e.stopPropagation();
-    await dbService.togglePinWorkspace(id);
+    
+    const ws = workspaces.find(w => w.id === id);
+    if (!ws) return;
+    
+    await fetch(`/api/workspaces/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_pinned: !ws.is_pinned })
+    });
     loadWorkspaces();
   }
 
@@ -374,7 +390,13 @@ export function Sidebar() {
                         variant="secondary"
                         className="text-[10px] h-7 w-full flex items-center justify-center gap-1.5 font-semibold"
                         onClick={async () => {
-                          const newWs = await dbService.createWorkspace(searchQuery.trim(), "");
+                          const res = await fetch("/api/workspaces", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ title: searchQuery.trim(), description: "" })
+                          });
+                          if (!res.ok) return;
+                          const newWs = await res.json();
                           setSearchQuery("");
                           setIsSearchOpen(false);
                           loadWorkspaces();

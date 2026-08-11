@@ -19,11 +19,19 @@ import {
 } from "lucide-react";
 import { dbService } from "@/lib/services/database/db-service";
 import { supabase } from "@/lib/supabase/client";
-import { Workspace, ResearchTopic, Reference } from "@/types";
+import { Workspace, ResearchTopic, Reference, UrlAnalysis } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { MoreVertical, Edit2, Trash2, AlertCircle } from "lucide-react";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -39,8 +47,19 @@ export default function DashboardPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
 
+  const [recentAnalyses, setRecentAnalyses] = useState<UrlAnalysis[]>([]);
+  const [duplicateAnalysis, setDuplicateAnalysis] = useState<UrlAnalysis | null>(null);
+
   const [userName, setUserName] = useState<string | null>(null);
   const [greeting, setGreeting] = useState("Good afternoon");
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Edit Workspace Modal State
+  const [editingWs, setEditingWs] = useState<Workspace | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
 
   useEffect(() => {
     const hour = new Date().getHours();
@@ -74,39 +93,98 @@ export default function DashboardPage() {
   }
 
   async function loadData() {
-    const ws = await dbService.getWorkspaces();
-    setWorkspaces(ws);
-    setPinnedWorkspaces(ws.filter(w => w.is_pinned));
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/workspaces");
+      if (!res.ok) throw new Error("Failed to fetch workspaces");
+      const ws: Workspace[] = await res.json();
+      setWorkspaces(ws);
+      setPinnedWorkspaces(ws.filter(w => w.is_pinned));
 
-    // Load recent references from all topics
-    const allRefs: Reference[] = [];
-    for (const w of ws) {
-      const topics = await dbService.getTopics(w.id);
-      for (const t of topics) {
-        const refs = await dbService.getReferences(t.id);
-        allRefs.push(...refs);
+      const analyses = await dbService.getAnalyses();
+      setRecentAnalyses(analyses.slice(0, 4));
+
+      // Load recent references from all topics
+      const allRefs: Reference[] = [];
+      for (const w of ws) {
+        const tRes = await fetch(`/api/topics?workspaceId=${w.id}`);
+        if (!tRes.ok) continue;
+        const topics: ResearchTopic[] = await tRes.json();
+        for (const t of topics) {
+          const rRes = await fetch(`/api/references?topicId=${t.id}`);
+          if (!rRes.ok) continue;
+          const refs: Reference[] = await rRes.json();
+          allRefs.push(...refs);
+        }
       }
+      // Sort by created date desc and take top 4
+      allRefs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      setRecentReferences(allRefs.slice(0, 4));
+    } catch (err) {
+      console.error(err);
+      setError("Failed to load workspaces. Please try again.");
+    } finally {
+      setIsLoading(false);
     }
-    // Sort by created date desc and take top 4
-    allRefs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    setRecentReferences(allRefs.slice(0, 4));
   }
 
   async function handleCreateWorkspace() {
     const title = prompt("Enter workspace name:");
     if (!title?.trim()) return;
-    const newWs = await dbService.createWorkspace(title.trim(), "Newly created research hub.");
+    const res = await fetch("/api/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title.trim(), description: "Newly created research hub." })
+    });
+    if (!res.ok) return;
+    const newWs = await res.json();
     loadData();
     router.push(`/workspace/${newWs.id}`);
   }
 
   async function handleTogglePin(id: string) {
-    await dbService.togglePinWorkspace(id);
+    const ws = workspaces.find(w => w.id === id);
+    if (!ws) return;
+    await fetch(`/api/workspaces/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_pinned: !ws.is_pinned })
+    });
     loadData();
+  }
+
+  async function handleDeleteWorkspace(id: string) {
+    if (!confirm("Are you sure you want to delete this workspace?")) return;
+    const res = await fetch(`/api/workspaces/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      loadData();
+    } else {
+      alert("Failed to delete workspace.");
+    }
+  }
+
+  async function handleSaveEdit() {
+    if (!editingWs || !editTitle.trim()) return;
+    const res = await fetch(`/api/workspaces/${editingWs.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: editTitle.trim(),
+        description: editDescription.trim(),
+      })
+    });
+    if (res.ok) {
+      setEditingWs(null);
+      loadData();
+    } else {
+      alert("Failed to update workspace.");
+    }
   }
 
   const handleModeSwitch = (mode: "research" | "analyze") => {
     setSearchMode(mode);
+    setDuplicateAnalysis(null);
     setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
@@ -121,8 +199,19 @@ export default function DashboardPage() {
     try {
       if (searchMode === "research") {
         const title = searchInput.trim();
-        const targetWs = await dbService.createWorkspace(title, "Automatically generated research workspace.");
-        const targetTopic = await dbService.createTopic(targetWs.id, title, "Primary research thread.");
+        const wsRes = await fetch("/api/workspaces", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title, description: "Automatically generated research workspace." })
+        });
+        const targetWs = await wsRes.json();
+        
+        const topRes = await fetch("/api/topics", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workspace_id: targetWs.id, title, description: "Primary research thread." })
+        });
+        const targetTopic = await topRes.json();
         
         setSubmitStatus("Workspace created! Redirecting...");
         setSearchInput("");
@@ -132,39 +221,19 @@ export default function DashboardPage() {
           router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
         }, 800);
       } else {
-        let targetWs = workspaces[0];
-        if (!targetWs) {
-          targetWs = await dbService.createWorkspace("My Research Workspace", "Default workspace created automatically.");
-        }
-
-        const topics = await dbService.getTopics(targetWs.id);
-        let targetTopic = topics[0];
-        if (!targetTopic) {
-          targetTopic = await dbService.createTopic(targetWs.id, "Web Collections", "Topic created for fast URL dumps.");
-        }
-
-        let type: "youtube" | "link" = "link";
-        let title = "Web Page Article";
-
-        if (searchInput.includes("youtube.com") || searchInput.includes("youtu.be")) {
-          type = "youtube";
-          title = "YouTube Video Analysis";
-        } else if (searchInput.includes("reddit.com")) {
-          title = "Reddit Discussion Thread";
-        }
-
         const cleanUrl = searchInput.trim();
-        title = `${title}: ${cleanUrl.replace("https://", "").split("/")[0]}`;
+        const existing = await dbService.getAnalysisByUrl(cleanUrl);
 
-        await dbService.addReference(targetTopic.id, title, cleanUrl, type);
+        if (existing) {
+          setDuplicateAnalysis(existing);
+          return;
+        }
 
-        setSubmitStatus("Saved to Web Collections!");
-        setSearchInput("");
+        setSubmitStatus("Redirecting to analysis...");
         setTimeout(() => {
           setSubmitStatus(null);
-          loadData();
-          router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}`);
-        }, 1200);
+          router.push(`/analyze?url=${encodeURIComponent(cleanUrl)}`);
+        }, 500);
       }
     } catch (err) {
       setSubmitStatus("An error occurred.");
@@ -321,6 +390,64 @@ export default function DashboardPage() {
               </span>
             )}
           </form>
+
+          {/* Duplicate Analysis Prompt */}
+          <AnimatePresence>
+            {duplicateAnalysis && (
+              <motion.div
+                initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                animate={{ opacity: 1, height: "auto", marginTop: 24 }}
+                exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="bg-primary/5 border border-primary/20 rounded-xl p-4">
+                  <div className="flex items-start gap-3">
+                    <Sparkles className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h3 className="text-sm font-bold text-foreground mb-1">You've already analyzed this source.</h3>
+                      <p className="text-xs text-muted-foreground mb-4">
+                        Last analyzed: {new Date(duplicateAnalysis.created_at).toLocaleDateString()} at {new Date(duplicateAnalysis.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        <br />What would you like to do?
+                      </p>
+
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <Button
+                          size="sm"
+                          className="bg-primary hover:bg-primary/90 text-[11px] font-semibold h-8"
+                          onClick={() => router.push(`/analyze?url=${encodeURIComponent(duplicateAnalysis.url)}`)}
+                        >
+                          Open Existing Analysis
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-[11px] font-semibold h-8"
+                          onClick={() => {
+                            setDuplicateAnalysis(null);
+                            setSubmitStatus("Redirecting to analysis...");
+                            setTimeout(() => {
+                              router.push(`/analyze?url=${encodeURIComponent(duplicateAnalysis.url)}&refresh=true`);
+                            }, 500);
+                          }}
+                        >
+                          Refresh Analysis
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-[11px] font-semibold h-8 text-muted-foreground hover:text-foreground"
+                          onClick={() => router.push(`/analyze?url=${encodeURIComponent(duplicateAnalysis.url)}&expand=true`)}
+                        >
+                          Expand into Research Workspace
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
         </div>
       </div>
 
@@ -331,21 +458,69 @@ export default function DashboardPage() {
           <span>Active & Pinned Workspaces</span>
         </div>
 
-        {workspaces.length > 0 ? (
+        {error ? (
+          <div className="py-12 border border-red-500/20 bg-red-500/10 rounded-[var(--radius)] text-center text-red-500 flex flex-col items-center">
+            <AlertCircle className="w-8 h-8 mb-2" />
+            <p className="text-sm font-semibold">{error}</p>
+            <Button variant="outline" onClick={loadData} className="mt-4 text-xs h-8">
+              Try Again
+            </Button>
+          </div>
+        ) : isLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {[...Array(6)].map((_, i) => (
+              <Card key={i} className="p-5 min-h-[120px] flex flex-col justify-between border-border bg-card">
+                <div>
+                  <div className="flex justify-between items-start">
+                    <Skeleton className="h-4 w-3/4 mb-3" />
+                    <Skeleton className="h-4 w-4" />
+                  </div>
+                  <Skeleton className="h-3 w-full mb-1" />
+                  <Skeleton className="h-3 w-2/3" />
+                </div>
+                <div className="flex justify-between mt-4">
+                  <Skeleton className="h-3 w-1/3" />
+                  <Skeleton className="h-3 w-1/4" />
+                </div>
+              </Card>
+            ))}
+          </div>
+        ) : workspaces.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {workspaces.slice(0, 6).map(ws => (
               <Card key={ws.id} className="hover:border-primary/20 bg-card border-border transition-all p-5 rounded-[var(--radius)] relative flex flex-col justify-between min-h-[120px] group">
                 <div>
                   <div className="flex items-start justify-between gap-2">
-                    <Link href={`/workspace/${ws.id}`} className="hover:text-primary transition-colors">
+                    <Link href={`/workspace/${ws.id}`} className="hover:text-primary transition-colors flex-1 pr-2">
                       <h3 className="text-xs font-bold text-foreground line-clamp-1">{ws.title}</h3>
                     </Link>
-                    <button
-                      onClick={() => handleTogglePin(ws.id)}
-                      className="p-1 rounded-[calc(var(--radius)-4px)] hover:bg-[#141414] text-muted-foreground group-hover:opacity-100 transition-opacity"
-                    >
-                      <Pin className={`w-3.5 h-3.5 ${ws.is_pinned ? "fill-primary text-primary" : "text-muted-foreground/60"}`} />
-                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => handleTogglePin(ws.id)}
+                        className="p-1 rounded-[calc(var(--radius)-4px)] hover:bg-[#141414] text-muted-foreground group-hover:opacity-100 transition-opacity"
+                      >
+                        <Pin className={`w-3.5 h-3.5 ${ws.is_pinned ? "fill-primary text-primary" : "text-muted-foreground/60"}`} />
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger className="p-1 rounded-[calc(var(--radius)-4px)] hover:bg-[#141414] text-muted-foreground group-hover:opacity-100 transition-opacity outline-none cursor-pointer">
+                          <MoreVertical className="w-3.5 h-3.5" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => {
+                            setEditingWs(ws);
+                            setEditTitle(ws.title);
+                            setEditDescription(ws.description || "");
+                          }}>
+                            <Edit2 className="w-4 h-4 mr-2" />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-red-500 focus:text-red-500" onClick={() => handleDeleteWorkspace(ws.id)}>
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </div>
                   <p className="text-[11px] text-muted-foreground/80 mt-1.5 line-clamp-2 leading-relaxed">
                     {ws.description || "No description provided."}
@@ -373,9 +548,61 @@ export default function DashboardPage() {
       </div>
 
       {/* References and Logs Row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+        {/* Recent Analyses */}
+        <div className="bg-card border border-border rounded-[var(--radius)] p-5">
+          <div className="flex items-center justify-between mb-4 border-b border-border/40 pb-2">
+            <h2 className="text-xs font-bold text-foreground flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-primary" />
+              <span>Recent Analyses</span>
+            </h2>
+            <span className="text-[10px] font-bold text-muted-foreground">{recentAnalyses.length} total</span>
+          </div>
+
+          {recentAnalyses.length > 0 ? (
+            <div className="divide-y divide-border/40">
+              {recentAnalyses.map(analysis => (
+                <div key={analysis.id} className="py-3 first:pt-0 last:pb-0 flex items-start justify-between gap-3 text-xs">
+                  <div className="flex gap-2.5 overflow-hidden">
+                    {analysis.type === "youtube" ? (
+                      <Youtube className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    ) : analysis.type === "reddit" ? (
+                      <Link2 className="w-4 h-4 text-orange-500 shrink-0 mt-0.5" />
+                    ) : (
+                      <BookOpen className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                    )}
+                    <div className="overflow-hidden">
+                      <span className="font-semibold text-foreground block truncate">{analysis.title || analysis.url.replace("https://", "").split("/")[0]}</span>
+                      <span className="text-[10px] text-muted-foreground/80 block mt-0.5 uppercase tracking-wider">
+                        {analysis.type}{analysis.creator ? ` • ${analysis.creator}` : ""}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className="text-[10px] text-muted-foreground/60 font-medium">
+                      {new Date(analysis.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                    </span>
+                    <button
+                      className="text-[10px] text-primary hover:underline font-semibold flex items-center gap-1"
+                      onClick={() => router.push(`/analyze?url=${encodeURIComponent(analysis.url)}`)}
+                    >
+                      Open Analysis <ArrowRight className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-10">
+              <Link2 className="w-6 h-6 text-muted-foreground/50 mx-auto mb-1.5" />
+              <p className="text-[11px] text-muted-foreground">No analyses performed yet.</p>
+            </div>
+          )}
+        </div>
+
         {/* Recent References */}
-        <div className="bg-card border border-border rounded-[var(--radius)] p-5 md:col-span-2">
+        <div className="bg-card border border-border rounded-[var(--radius)] p-5">
           <div className="flex items-center justify-between mb-4 border-b border-border/40 pb-2">
             <h2 className="text-xs font-bold text-foreground flex items-center gap-1.5">
               <BookOpen className="w-4 h-4 text-primary" />
@@ -437,6 +664,41 @@ export default function DashboardPage() {
           </Link>
         </div>
       </div>
+
+      {/* Edit Workspace Modal */}
+      {editingWs && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
+          <Card className="w-full max-w-md p-6 bg-card border-border shadow-lg">
+            <h2 className="text-lg font-bold mb-4">Edit Workspace</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-bold text-muted-foreground">Title</label>
+                <input
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full mt-1 bg-muted/40 border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-primary"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-muted-foreground">Description</label>
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  className="w-full mt-1 bg-muted/40 border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-primary resize-none h-24"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <Button variant="outline" onClick={() => setEditingWs(null)}>
+                Cancel
+              </Button>
+              <Button onClick={handleSaveEdit}>
+                Save Changes
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

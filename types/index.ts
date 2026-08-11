@@ -30,6 +30,7 @@ export interface ResearchTopic {
   updated_at: string;
   references_count?: number;
   notes_count?: number;
+  research_data?: any; // JSONB storage for generated insights
 }
 
 export type ReferenceType = "link" | "youtube" | "reddit" | "pdf" | "document";
@@ -87,4 +88,30 @@ export interface Integration {
   active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface UrlAnalysis {
+  id: string;
+  url: string;
+  type: string;
+  title: string;
+  creator?: string;
+  publish_date?: string;
+  duration?: string;
+  language?: string;
+  primary_topic?: string;
+  overview?: any;
+  main_ideas?: any;
+  detailed_breakdown?: any;
+  reading_time_saved?: string;
+  short_summary?: string;
+  key_takeaways?: any;
+  timeline?: any;
+  important_quotes?: any;
+  topics_covered?: string[];
+  people_mentioned?: string[];
+  technologies_mentioned?: string[];
+  resources_mentioned?: string[];
+  status: string;
+  created_at: string;
 }

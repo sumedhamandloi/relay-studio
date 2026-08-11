@@ -1,4 +1,4 @@
-import { Workspace, ResearchTopic, Reference, ResearchNote, GeneratedScript, BrandProfile, Integration } from "@/types";
+import { Workspace, ResearchTopic, Reference, ResearchNote, GeneratedScript, BrandProfile, Integration, UrlAnalysis } from "@/types";
 import { DUMMY_WORKSPACES, DUMMY_TOPICS, DUMMY_REFERENCES, DUMMY_NOTES, DUMMY_SCRIPTS, DUMMY_BRAND_PROFILE, DUMMY_INTEGRATIONS } from "@/lib/constants/dummy-data";
 import { supabase } from "@/lib/supabase/client";
 
@@ -10,7 +10,8 @@ const KEYS = {
   NOTES: "relay_studio_notes",
   SCRIPTS: "relay_studio_scripts",
   BRAND: "relay_studio_brand",
-  INTEGRATIONS: "relay_studio_integrations"
+  INTEGRATIONS: "relay_studio_integrations",
+  URL_ANALYSES: "relay_studio_url_analyses"
 };
 
 // Check if we are running in the browser
@@ -40,6 +41,9 @@ function initLocalStorage() {
   if (!localStorage.getItem(KEYS.INTEGRATIONS)) {
     localStorage.setItem(KEYS.INTEGRATIONS, JSON.stringify(DUMMY_INTEGRATIONS));
   }
+  if (!localStorage.getItem(KEYS.URL_ANALYSES)) {
+    localStorage.setItem(KEYS.URL_ANALYSES, JSON.stringify([]));
+  }
 }
 
 // Initialize on import
@@ -49,6 +53,15 @@ initLocalStorage();
 function isSupabaseConfigured(): boolean {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   return !!url && !url.includes("placeholder-project");
+}
+
+// Mock user ID for local storage testing
+const MOCK_USER_ID = "00000000-0000-0000-0000-000000000000";
+
+function notifyWorkspaceChange() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("workspaces-updated"));
+  }
 }
 
 export const dbService = {
@@ -62,7 +75,7 @@ export const dbService = {
         .order("updated_at", { ascending: false });
       if (!error && data) return data as Workspace[];
     }
-    
+
     // Fallback to local storage
     if (isClient) {
       const stored = localStorage.getItem(KEYS.WORKSPACES);
@@ -109,6 +122,34 @@ export const dbService = {
     return newWs;
   },
 
+  async renameWorkspace(id: string, newTitle: string): Promise<Workspace | null> {
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("workspaces")
+        .update({ title: newTitle, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
+      if (!error && data) return data as Workspace;
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.WORKSPACES);
+      if (stored) {
+        const workspaces = JSON.parse(stored) as Workspace[];
+        const idx = workspaces.findIndex(ws => ws.id === id);
+        if (idx !== -1) {
+          workspaces[idx].title = newTitle;
+          workspaces[idx].updated_at = new Date().toISOString();
+          localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(workspaces));
+          notifyWorkspaceChange();
+          return workspaces[idx];
+        }
+      }
+    }
+    return null;
+  },
+
   async togglePinWorkspace(id: string): Promise<Workspace | null> {
     if (isSupabaseConfigured()) {
       // Fetch current state
@@ -140,6 +181,59 @@ export const dbService = {
     return null;
   },
 
+  async updateWorkspace(id: string, updates: Partial<Workspace>): Promise<Workspace | null> {
+    const safeUpdates = { ...updates, updated_at: new Date().toISOString() };
+    delete safeUpdates.id; // Don't allow updating ID
+
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("workspaces")
+        .update(safeUpdates)
+        .eq("id", id)
+        .select()
+        .single();
+      if (!error && data) return data as Workspace;
+      if (error) console.error("Error updating workspace:", error);
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.WORKSPACES);
+      if (stored) {
+        const workspaces = JSON.parse(stored) as Workspace[];
+        const idx = workspaces.findIndex(ws => ws.id === id);
+        if (idx !== -1) {
+          workspaces[idx] = { ...workspaces[idx], ...safeUpdates };
+          localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(workspaces));
+          return workspaces[idx];
+        }
+      }
+    }
+    return null;
+  },
+
+  async deleteWorkspace(id: string): Promise<boolean> {
+    if (isSupabaseConfigured()) {
+      const { error } = await supabase
+        .from("workspaces")
+        .delete()
+        .eq("id", id);
+      if (error) {
+        console.error("Error deleting workspace:", error);
+        return false;
+      }
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.WORKSPACES);
+      if (stored) {
+        const workspaces = JSON.parse(stored) as Workspace[];
+        const filtered = workspaces.filter(ws => ws.id !== id);
+        localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(filtered));
+      }
+    }
+    return true;
+  },
+
   // TOPICS
   async getTopics(workspaceId: string): Promise<ResearchTopic[]> {
     if (isSupabaseConfigured()) {
@@ -156,7 +250,7 @@ export const dbService = {
       if (stored) {
         const topics = JSON.parse(stored) as ResearchTopic[];
         const filtered = topics.filter(t => t.workspace_id === workspaceId);
-        
+
         const refs = JSON.parse(localStorage.getItem(KEYS.REFERENCES) || "[]") as Reference[];
         const notes = JSON.parse(localStorage.getItem(KEYS.NOTES) || "[]") as ResearchNote[];
 
@@ -190,6 +284,7 @@ export const dbService = {
         .select()
         .single();
       if (!error && data) return data as ResearchTopic;
+      if (error) console.error("Supabase Error in createTopic:", error);
     }
 
     if (isClient) {
@@ -201,15 +296,111 @@ export const dbService = {
     return newTopic;
   },
 
+  async updateTopic(id: string, updates: Partial<ResearchTopic>): Promise<ResearchTopic | null> {
+    const safeUpdates = { ...updates, updated_at: new Date().toISOString() };
+    delete safeUpdates.id;
+
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("research_topics")
+        .update(safeUpdates)
+        .eq("id", id)
+        .select()
+        .single();
+      if (!error && data) return data as ResearchTopic;
+      if (error) console.error("Error updating topic:", error);
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.TOPICS);
+      if (stored) {
+        const topics = JSON.parse(stored) as ResearchTopic[];
+        const idx = topics.findIndex(t => t.id === id);
+        if (idx !== -1) {
+          topics[idx] = { ...topics[idx], ...safeUpdates };
+          localStorage.setItem(KEYS.TOPICS, JSON.stringify(topics));
+          this.touchWorkspace(topics[idx].workspace_id);
+          return topics[idx];
+        }
+      }
+    }
+    return null;
+  },
+
+  async updateTopicResearchData(id: string, researchData: any): Promise<boolean> {
+    const safeUpdates = { research_data: researchData, updated_at: new Date().toISOString() };
+
+    if (isSupabaseConfigured()) {
+      const { error } = await supabase
+        .from("research_topics")
+        .update(safeUpdates)
+        .eq("id", id);
+      if (error) {
+        console.error("Error updating research data:", error);
+        return false;
+      }
+      return true;
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.TOPICS);
+      if (stored) {
+        const topics = JSON.parse(stored) as ResearchTopic[];
+        const idx = topics.findIndex(t => t.id === id);
+        if (idx !== -1) {
+          topics[idx] = { ...topics[idx], ...safeUpdates };
+          localStorage.setItem(KEYS.TOPICS, JSON.stringify(topics));
+          this.touchWorkspace(topics[idx].workspace_id);
+          return true;
+        }
+      }
+    }
+    return false;
+  },
+
+  async deleteTopic(id: string): Promise<boolean> {
+    if (isSupabaseConfigured()) {
+      const { error } = await supabase
+        .from("research_topics")
+        .delete()
+        .eq("id", id);
+      if (error) {
+        console.error("Error deleting topic:", error);
+        return false;
+      }
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.TOPICS);
+      if (stored) {
+        const topics = JSON.parse(stored) as ResearchTopic[];
+        const idx = topics.findIndex(t => t.id === id);
+        if (idx !== -1) {
+          const wsId = topics[idx].workspace_id;
+          const filtered = topics.filter(t => t.id !== id);
+          localStorage.setItem(KEYS.TOPICS, JSON.stringify(filtered));
+          this.touchWorkspace(wsId);
+        }
+      }
+    }
+    return true;
+  },
+
   // REFERENCES
   async getReferences(topicId: string): Promise<Reference[]> {
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
-        .from("references")
+        .from("research_references")
         .select("*")
         .eq("topic_id", topicId)
         .order("created_at", { ascending: false });
-      if (!error && data) return data as Reference[];
+      if (!error && data) {
+        return data.map((d: any) => ({
+          ...d,
+          type: d.source_type,
+          summary: d.notes
+        })) as Reference[];
+      }
     }
 
     if (isClient) {
@@ -237,11 +428,18 @@ export const dbService = {
 
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
-        .from("references")
-        .insert({ topic_id: topicId, title, url, type, raw_content: rawContent, summary: newRef.summary })
+        .from("research_references")
+        .insert({ topic_id: topicId, title, url: url, source_type: type, raw_content: rawContent, notes: newRef.summary })
         .select()
         .single();
-      if (!error && data) return data as Reference;
+      if (!error && data) {
+        return {
+          ...data,
+          type: data.source_type,
+          summary: data.notes
+        } as Reference;
+      }
+      if (error) console.error("Supabase Error in addReference:", error);
     }
 
     if (isClient) {
@@ -249,11 +447,98 @@ export const dbService = {
       const references = stored ? JSON.parse(stored) : [...DUMMY_REFERENCES];
       references.unshift(newRef);
       localStorage.setItem(KEYS.REFERENCES, JSON.stringify(references));
-      
+
       // Touch topic update date
       this.touchTopic(topicId);
     }
     return newRef;
+  },
+
+  async updateReference(id: string, updates: Partial<Reference>): Promise<Reference | null> {
+    const safeUpdates = { ...updates };
+    delete safeUpdates.id;
+
+    // Map local 'type' and 'summary' to DB 'source_type' and 'notes'
+    const dbUpdates: any = { ...safeUpdates };
+    if (dbUpdates.type !== undefined) {
+      dbUpdates.source_type = dbUpdates.type;
+      delete dbUpdates.type;
+    }
+    if (dbUpdates.summary !== undefined) {
+      dbUpdates.notes = dbUpdates.summary;
+      delete dbUpdates.summary;
+    }
+
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("research_references")
+        .update(dbUpdates)
+        .eq("id", id)
+        .select()
+        .single();
+      if (!error && data) {
+        return {
+          ...data,
+          type: data.source_type,
+          summary: data.notes
+        } as Reference;
+      }
+      if (error) console.error("Error updating reference:", error);
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.REFERENCES);
+      if (stored) {
+        const references = JSON.parse(stored) as Reference[];
+        const idx = references.findIndex(r => r.id === id);
+        if (idx !== -1) {
+          references[idx] = { ...references[idx], ...safeUpdates };
+          localStorage.setItem(KEYS.REFERENCES, JSON.stringify(references));
+          this.touchTopic(references[idx].topic_id);
+          return references[idx];
+        }
+      }
+    }
+    return null;
+  },
+
+  async deleteReference(id: string): Promise<boolean> {
+    if (isSupabaseConfigured()) {
+      const { error } = await supabase
+        .from("research_references")
+        .delete()
+        .eq("id", id);
+      if (error) {
+        console.error("Error deleting reference:", error);
+        return false;
+      }
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.REFERENCES);
+      if (stored) {
+        const references = JSON.parse(stored) as Reference[];
+        const idx = references.findIndex(r => r.id === id);
+        if (idx !== -1) {
+          const tId = references[idx].topic_id;
+          const filtered = references.filter(r => r.id !== id);
+          localStorage.setItem(KEYS.REFERENCES, JSON.stringify(filtered));
+          this.touchTopic(tId);
+        }
+      }
+    }
+    return true;
+  },
+
+  // WORKSPACE REFERENCES
+  async getWorkspaceReferences(workspaceId: string): Promise<Reference[]> {
+    const topics = await this.getTopics(workspaceId);
+    let allRefs: Reference[] = [];
+    for (const t of topics) {
+      const refs = await this.getReferences(t.id);
+      allRefs = [...allRefs, ...refs];
+    }
+    return allRefs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   },
 
   // RESEARCH NOTES
@@ -275,7 +560,7 @@ export const dbService = {
         if (filtered.length > 0) return filtered;
       }
     }
-    
+
     const fallback = DUMMY_NOTES.filter(n => n.topic_id === topicId);
     if (fallback.length === 0 && isClient) {
       // Auto-create a note placeholder for editing if empty
@@ -487,7 +772,7 @@ export const dbService = {
       if (idx !== -1) {
         topics[idx].updated_at = new Date().toISOString();
         localStorage.setItem(KEYS.TOPICS, JSON.stringify(topics));
-        
+
         // Also touch workspace
         this.touchWorkspace(topics[idx].workspace_id);
       }
@@ -506,5 +791,214 @@ export const dbService = {
         localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(workspaces));
       }
     }
+  },
+  async getAnalyses(): Promise<UrlAnalysis[]> {
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("url_analyses")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!error && data) {
+        return data as UrlAnalysis[];
+      }
+
+      console.error("Error fetching analyses:", error);
+    }
+
+    // Temporary fallback
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.URL_ANALYSES);
+      if (stored) {
+        return JSON.parse(stored) as UrlAnalysis[];
+      }
+    }
+
+    return [];
+  },
+
+  async getAnalysisByUrl(url: string): Promise<UrlAnalysis | null> {
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("url_analyses")
+        .select("*")
+        .eq("url", url)
+        .single();
+
+      if (!error && data) {
+        return data as UrlAnalysis;
+      }
+    }
+
+    // Temporary fallback
+    const analyses = await this.getAnalyses();
+    return analyses.find(a => a.url === url) || null;
+  },
+  async createAnalysis(url: string, type: "youtube" | "reddit" | "github" | "generic", title?: string): Promise<UrlAnalysis> {
+    const existing = await this.getAnalysisByUrl(url);
+    if (existing) return existing;
+
+    // Generate mock intelligence data based on type
+    const baseDomain = url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0];
+    const generatedTitle = title || `${type === "youtube" ? "YouTube Video" : type === "reddit" ? "Reddit Discussion" : "Web Article"}: ${baseDomain}`;
+
+    let keyTakeaways = [
+      "The primary thesis focuses on efficiency optimizations in modern frameworks.",
+      "A new standard is proposed for handling distributed state.",
+      "The community remains divided on the practical application of this architecture."
+    ];
+    let shortSummary = "This source provides a highly practical, implementation-focused view of the topic, breaking down the essential concepts for immediate application.";
+    let overview = [
+      "This document provides a comprehensive overview of modern web architectures, focusing on the trade-offs between monolithic structures and micro-frontends.",
+      "The author argues that while micro-frontends offer isolation, they introduce significant orchestration complexity that is often underestimated by teams adopting them."
+    ];
+    let mainIdeas = [
+      { heading: "The Orchestration Tax", explanation: "Every new micro-frontend adds a fixed cost to the orchestration layer, impacting routing and state management." },
+      { heading: "State Isolation vs Sharing", explanation: "Finding the right balance between isolated component state and global application state is the hardest challenge." }
+    ];
+    let detailedBreakdown = [
+      { section: "Introduction", content: "Sets the stage by defining what a modern framework aims to achieve: speed, DX, and maintainability." },
+      { section: "Core Arguments", content: "Explores the diminishing returns of hyper-optimization." },
+      { section: "Conclusion", content: "Recommends a hybrid approach, using micro-frontends only when organizational scale demands it." }
+    ];
+    let readingTimeSaved = "12 minutes";
+    let creator = "Anonymous";
+    let duration = undefined;
+    let timeline = undefined;
+    let importantQuotes = [
+      "Optimization is not just about speed, it's about predictable behavior at scale.",
+      "The true cost of abstraction is only realized when the system fails."
+    ];
+    let topicsCovered = ["Frameworks", "State Management", "Performance Optimization"];
+    let peopleMentioned = ["John Doe", "Jane Smith"];
+    let technologiesMentioned = ["React", "TypeScript", "Node.js"];
+    let resourcesMentioned = ["Official Documentation", "GitHub Repository"];
+
+    if (type === "youtube") {
+      keyTakeaways = [
+        "Agents require complex orchestration layers to function reliably.",
+        "Memory management is the biggest bottleneck for autonomous systems.",
+        "Tools must have strict validation to prevent endless loops."
+      ];
+      shortSummary = "A comprehensive visual breakdown of building autonomous AI systems, focusing on orchestration, memory, and tool integration.";
+      overview = [
+        "In this video, Fireship explores the rapidly evolving landscape of autonomous AI agents. The video breaks down the fundamental components required to build a system where AI can make decisions and take actions independently.",
+        "The core focus is on the 'plumbing'—the orchestration layer, memory management, and strict tool validation—rather than the LLM itself. It argues that building reliable agents is primarily a software engineering challenge, not an AI challenge."
+      ];
+      mainIdeas = [
+        { heading: "The Orchestration Layer", explanation: "Agents need a reliable loop (like ReAct) to observe, think, and act. If this loop breaks, the agent fails." },
+        { heading: "Memory is the Bottleneck", explanation: "LLMs are stateless. An agent's intelligence is limited by how effectively it can retrieve context from short-term (context window) and long-term (vector DB) memory." },
+        { heading: "Tool Validation", explanation: "Agents will hallucinate inputs to tools. Strict schema validation is necessary to prevent them from executing destructive or looping actions." }
+      ];
+      detailedBreakdown = [
+        { section: "Introduction to Agents", content: "Defines the difference between a chatbot and an agent: agency and the ability to execute tools." },
+        { section: "The ReAct Framework", content: "Explains the Reason-Act-Observe loop that powers most modern agents." },
+        { section: "Building the Memory Layer", content: "Discusses the use of Vector Databases to give agents long-term recall." },
+        { section: "Security and Sandboxing", content: "Highlights the dangers of giving AI access to a live terminal and how to sandbox execution." }
+      ];
+      readingTimeSaved = "15 minutes";
+      creator = "Fireship";
+      duration = "15:24";
+      timeline = [
+        { timestamp: "00:00", description: "Introduction to Autonomous Agents" },
+        { timestamp: "03:15", description: "The Orchestration Layer Explained" },
+        { timestamp: "08:42", description: "Memory Management Strategies" },
+        { timestamp: "12:05", description: "Tool Integration and Validation" },
+        { timestamp: "14:50", description: "Conclusion and Future Outlook" }
+      ];
+      importantQuotes = [
+        "An agent without memory is just a calculator.",
+        "The hardest part of building AI agents isn't the AI, it's the plumbing."
+      ];
+      topicsCovered = ["AI Agents", "Orchestration", "Memory Management", "LLMs"];
+      peopleMentioned = ["Fireship"];
+      technologiesMentioned = ["OpenAI", "LangChain", "Vector Databases", "Python"];
+      resourcesMentioned = ["LangChain Docs", "Pinecone"];
+    } else if (type === "reddit") {
+      keyTakeaways = [
+        "The community largely agrees that current implementations are flawed.",
+        "Many users suggest migrating to strictly typed frameworks.",
+        "Counter arguments highlight the loss of creative flexibility."
+      ];
+      shortSummary = "A lively community debate weighing the pros and cons of strict typing in modern AI frameworks vs creative flexibility.";
+      overview = [
+        "This Reddit thread highlights a growing schism in the developer community regarding the use of strictly typed languages (like TypeScript) for AI framework development.",
+        "One side argues that strict typing is essential for production reliability, while the other claims it slows down the rapid iteration required in the fast-moving AI space."
+      ];
+      mainIdeas = [
+        { heading: "Production Reliability", explanation: "Types prevent catastrophic runtime failures when dealing with unpredictable LLM outputs." },
+        { heading: "Iteration Speed", explanation: "Writing complex type definitions for dynamic LLM responses can significantly slow down prototyping." }
+      ];
+      detailedBreakdown = [
+        { section: "Original Post", content: "User complains about spending more time defining types than writing logic for an AI agent." },
+        { section: "The Pro-Type Argument", content: "Senior engineers chime in explaining how types saved their production systems from hallucinated JSON payloads." },
+        { section: "The Middle Ground", content: "Suggestions to use Zod or similar validation libraries at runtime instead of purely static typing." }
+      ];
+      readingTimeSaved = "8 minutes";
+      creator = "u/dev_enthusiast";
+      importantQuotes = [
+        "Strict typing saved our production build from a catastrophic failure.",
+        "We spend more time fighting the compiler than building features."
+      ];
+      topicsCovered = ["TypeScript", "Community Debate", "Developer Experience"];
+      peopleMentioned = ["u/dev_enthusiast", "u/angry_coder"];
+      technologiesMentioned = ["TypeScript", "JavaScript", "React"];
+      resourcesMentioned = ["Reddit Thread"];
+    }
+
+    const newAnalysis: UrlAnalysis = {
+      id: "analysis-" + Math.random().toString(36).substr(2, 9),
+      url,
+      type,
+      title: generatedTitle,
+      creator,
+      publish_date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      duration,
+      language: "English",
+      primary_topic: type === "youtube" ? "AI Architecture" : type === "reddit" ? "Developer Community" : "Web Development",
+      overview,
+      main_ideas: mainIdeas,
+      detailed_breakdown: detailedBreakdown,
+      reading_time_saved: readingTimeSaved,
+      short_summary: shortSummary,
+      key_takeaways: keyTakeaways,
+      timeline,
+      important_quotes: importantQuotes,
+      topics_covered: topicsCovered,
+      people_mentioned: peopleMentioned,
+      technologies_mentioned: technologiesMentioned,
+      resources_mentioned: resourcesMentioned,
+      status: "analyzed",
+      created_at: new Date().toISOString()
+    };
+
+    // Save to Supabase if configured
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("url_analyses")
+        .insert([newAnalysis])
+        .select()
+        .single();
+
+      if (!error && data) {
+        return data as UrlAnalysis;
+      }
+
+      console.log("SUPABASE ERROR:");
+      console.log(error);
+      console.log(JSON.stringify(error, null, 2));
+      console.error("Failed to save analysis:", error);
+    }
+
+    // Temporary fallback (until migration is complete)
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.URL_ANALYSES);
+      const analyses = stored ? JSON.parse(stored) : [];
+      analyses.unshift(newAnalysis);
+      localStorage.setItem(KEYS.URL_ANALYSES, JSON.stringify(analyses));
+    }
+
+    return newAnalysis;
   }
 };
+

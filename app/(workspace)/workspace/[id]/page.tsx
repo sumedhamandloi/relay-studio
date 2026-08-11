@@ -16,7 +16,9 @@ import {
   Save,
   ExternalLink,
   Lock,
-  Layers
+  Layers,
+  Trash2,
+  Edit2
 } from "lucide-react";
 import { dbService } from "@/lib/services/database/db-service";
 import { Workspace, ResearchTopic, Reference, ResearchNote, GeneratedScript } from "@/types";
@@ -58,6 +60,9 @@ export default function WorkspacePage({ params }: PageProps) {
   const [refType, setRefType] = useState<"link" | "youtube" | "reddit" | "document">("link");
   const [refContent, setRefContent] = useState("");
 
+  const [isDeletingTopic, setIsDeletingTopic] = useState<string | null>(null);
+  const [isDeletingRef, setIsDeletingRef] = useState<string | null>(null);
+
   // Editor States
   const [noteTitle, setNoteTitle] = useState("");
   const [noteContent, setNoteContent] = useState("");
@@ -77,7 +82,12 @@ export default function WorkspacePage({ params }: PageProps) {
   }, [selectedTopic]);
 
   async function loadWorkspaceData() {
-    const wsList = await dbService.getWorkspaces();
+    const res = await fetch("/api/workspaces");
+    if (!res.ok) {
+      router.push("/dashboard");
+      return;
+    }
+    const wsList: Workspace[] = await res.json();
     const currentWs = wsList.find(w => w.id === id);
     if (!currentWs) {
       router.push("/dashboard");
@@ -85,21 +95,29 @@ export default function WorkspacePage({ params }: PageProps) {
     }
     setWorkspace(currentWs);
 
-    const wsTopics = await dbService.getTopics(id);
-    setTopics(wsTopics);
+    const tRes = await fetch(`/api/topics?workspaceId=${id}`);
+    if (tRes.ok) {
+      const wsTopics: ResearchTopic[] = await tRes.json();
+      setTopics(wsTopics);
 
-    // Set active topic
-    if (wsTopics.length > 0) {
-      const match = wsTopics.find(t => t.id === initialTopicId);
-      setSelectedTopic(match || wsTopics[0]);
-    } else {
-      setSelectedTopic(null);
+      // Set active topic
+      if (wsTopics.length > 0) {
+        const match = wsTopics.find(t => t.id === initialTopicId);
+        setSelectedTopic(match || wsTopics[0]);
+      } else {
+        setSelectedTopic(null);
+      }
     }
   }
 
   async function loadTopicContents(topicId: string) {
-    const refs = await dbService.getReferences(topicId);
-    setReferences(refs);
+    const rRes = await fetch(`/api/references?topicId=${topicId}`);
+    if (rRes.ok) {
+      const refs: Reference[] = await rRes.json();
+      setReferences(refs);
+    } else {
+      setReferences([]);
+    }
 
     const nts = await dbService.getNotes(topicId);
     setNotes(nts);
@@ -125,13 +143,24 @@ export default function WorkspacePage({ params }: PageProps) {
   async function handleCreateTopic(e: React.FormEvent) {
     e.preventDefault();
     if (!newTopicTitle.trim() || !workspace) return;
-    const newT = await dbService.createTopic(workspace.id, newTopicTitle.trim(), "");
+    
+    const res = await fetch("/api/topics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace_id: workspace.id, title: newTopicTitle.trim(), description: "" })
+    });
+    if (!res.ok) return;
+    const newT = await res.json();
+    
     setNewTopicTitle("");
     setIsAddingTopic(false);
     
     // Refresh topics
-    const wsTopics = await dbService.getTopics(workspace.id);
-    setTopics(wsTopics);
+    const tRes = await fetch(`/api/topics?workspaceId=${workspace.id}`);
+    if (tRes.ok) {
+      const wsTopics = await tRes.json();
+      setTopics(wsTopics);
+    }
     setSelectedTopic(newT);
   }
 
@@ -139,13 +168,17 @@ export default function WorkspacePage({ params }: PageProps) {
     e.preventDefault();
     if (!refTitle.trim() || !selectedTopic) return;
     
-    await dbService.addReference(
-      selectedTopic.id,
-      refTitle.trim(),
-      refUrl.trim() || undefined,
-      refType,
-      refContent.trim() || undefined
-    );
+    await fetch("/api/references", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        topic_id: selectedTopic.id,
+        title: refTitle.trim(),
+        url: refUrl.trim() || undefined,
+        type: refType,
+        summary: refContent.trim() || undefined
+      })
+    });
 
     // Reset Form
     setRefTitle("");
@@ -156,6 +189,31 @@ export default function WorkspacePage({ params }: PageProps) {
 
     // Reload content
     loadTopicContents(selectedTopic.id);
+  }
+
+  async function handleDeleteTopic(topicId: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm("Are you sure you want to delete this topic and all its contents?")) return;
+    
+    setIsDeletingTopic(topicId);
+    await fetch(`/api/topics/${topicId}`, { method: "DELETE" });
+    setIsDeletingTopic(null);
+    
+    if (selectedTopic?.id === topicId) setSelectedTopic(null);
+    const tRes = await fetch(`/api/topics?workspaceId=${id}`);
+    if (tRes.ok) {
+      const wsTopics = await tRes.json();
+      setTopics(wsTopics);
+    }
+  }
+
+  async function handleDeleteReference(refId: string) {
+    if (!confirm("Delete this reference?")) return;
+    setIsDeletingRef(refId);
+    await fetch(`/api/references/${refId}`, { method: "DELETE" });
+    setIsDeletingRef(null);
+    
+    if (selectedTopic) loadTopicContents(selectedTopic.id);
   }
 
   async function handleSaveNote() {
@@ -280,21 +338,32 @@ export default function WorkspacePage({ params }: PageProps) {
           {/* Topics List */}
           <div className="space-y-0.5">
             {topics.map(t => (
-              <button
+              <div
                 key={t.id}
                 onClick={() => setSelectedTopic(t)}
                 className={cn(
-                  "w-full flex items-center justify-between px-2.5 py-2 rounded-[calc(var(--radius)-4px)] text-[11px] font-semibold text-left border transition-colors",
+                  "group w-full flex items-center justify-between px-2.5 py-2 rounded-[calc(var(--radius)-4px)] text-[11px] text-left border transition-colors cursor-pointer",
                   selectedTopic?.id === t.id
-                    ? "bg-card border-border text-foreground font-semibold"
-                    : "text-muted-foreground border-transparent hover:bg-card/40 hover:text-foreground"
+                    ? "bg-card border-border text-foreground font-semibold shadow-sm"
+                    : "text-muted-foreground border-transparent hover:bg-card/40 hover:text-foreground font-medium"
                 )}
               >
                 <span className="truncate pr-2">{t.title}</span>
-                <span className="text-[8px] font-bold text-muted-text px-1.5 py-0.5 border border-border bg-[#141414] rounded uppercase tracking-wider">
-                  {t.status === "completed" ? "Done" : "Draft"}
-                </span>
-              </button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <span className="text-[8px] font-bold text-muted-text px-1.5 py-0.5 border border-border bg-[#141414] rounded uppercase tracking-wider hidden group-hover:hidden sm:block">
+                    {t.status === "completed" ? "Done" : "Draft"}
+                  </span>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="w-5 h-5 h-auto p-1 opacity-0 group-hover:opacity-100 hover:bg-destructive/20 hover:text-destructive transition-opacity"
+                    onClick={(e) => handleDeleteTopic(t.id, e)}
+                    disabled={isDeletingTopic === t.id}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
+                </div>
+              </div>
             ))}
             {topics.length === 0 && (
               <div className="text-center py-8 text-[11px] text-muted-foreground/60 border border-dashed border-border/30 rounded-[var(--radius)]">
@@ -406,8 +475,8 @@ export default function WorkspacePage({ params }: PageProps) {
               )}>
                 
                 {/* 0. Research tab (New) */}
-                {activeTab === "research" && (
-                  <ResearchView />
+                {activeTab === "research" && selectedTopic && (
+                  <ResearchView topicId={selectedTopic.id} initialData={selectedTopic.research_data} />
                 )}
 
                 {/* 1. References tab */}
@@ -501,6 +570,15 @@ export default function WorkspacePage({ params }: PageProps) {
                                   <ExternalLink className="w-3.5 h-3.5" />
                                 </a>
                               )}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="w-6 h-6 hover:bg-destructive/20 hover:text-destructive"
+                                onClick={() => handleDeleteReference(ref.id)}
+                                disabled={isDeletingRef === ref.id}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
                             </div>
                             
                             {/* Summary description */}

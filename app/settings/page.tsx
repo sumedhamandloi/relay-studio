@@ -46,7 +46,7 @@ export default function SettingsPage() {
     setVoiceDesc(bp.voice_description || "");
     setGuidelines(bp.guidelines || "");
 
-    const ws = await dbService.getWorkspaces(); // triggers local storage sync check
+    await fetch("/api/workspaces"); // triggers backend verification / analytics if needed
     if (typeof window !== "undefined") {
       const storedInts = localStorage.getItem("relay_studio_integrations");
       if (storedInts) {

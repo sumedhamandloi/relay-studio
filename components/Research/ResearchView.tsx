@@ -111,8 +111,8 @@ export function ResearchNav() {
  * Renders inside the padded scroll container in page.tsx.
  * Does NOT include the navigation strip.
  */
-export function ResearchView() {
-  const [data, setData] = useState<ResearchData | null>(null);
+export function ResearchView({ topicId, initialData }: { topicId: string, initialData?: ResearchData | null }) {
+  const [data, setData] = useState<ResearchData | null>(initialData || null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [activeSection, setActiveSection] = useState("overview");
   const [generatedSections, setGeneratedSections] = useState<string[]>([]);
@@ -132,6 +132,11 @@ export function ResearchView() {
       window.dispatchEvent(new Event("research:dataReady"));
     }
   }, [data]);
+
+  // Sync initialData prop when selecting a different topic
+  useEffect(() => {
+    setData(initialData || null);
+  }, [initialData]);
 
   // Listen for scroll requests from ResearchNav
   useEffect(() => {
@@ -175,31 +180,53 @@ export function ResearchView() {
     return () => observer.disconnect();
   }, [data, generatedSections]);
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     setIsGenerating(true);
-    setData(mockResearchData);
     setGeneratedSections([]);
     setCompletedMessages([]);
-    let currentIdx = 0;
-    const nextStep = () => {
-      if (currentIdx < GENERATION_SEQUENCE.length) {
-        const step = GENERATION_SEQUENCE[currentIdx];
-        setGeneratingStatus(step.loadingMsg);
-        setTimeout(() => {
-          setGeneratedSections(prev => [...prev, step.id]);
-          setCompletedMessages(prev => [
-            ...prev,
-            `${NAV_ITEMS.find(n => n.id === step.id)?.label} generated`,
-          ]);
-          currentIdx++;
-          nextStep();
-        }, 800 + Math.random() * 600);
-      } else {
-        setGeneratingStatus(null);
-        setIsGenerating(false);
+    
+    setGeneratingStatus("Extracting URLs and synthesizing research... This may take up to a minute.");
+
+    try {
+      // Lazy-import to avoid breaking client boundaries if possible, or just standard import.
+      // Wait, we need to call the server action. 
+      // It's a server action, so we can just import and call it. But I'll dynamically import it to avoid top-level issues.
+      const { generateResearchAction } = await import("@/app/actions/research");
+      const res = await generateResearchAction(topicId);
+      
+      if (!res.success) {
+        throw new Error(res.error);
       }
-    };
-    nextStep();
+
+      setData(res.data);
+      
+      // Animate sections appearing
+      let currentIdx = 0;
+      const nextStep = () => {
+        if (currentIdx < GENERATION_SEQUENCE.length) {
+          const step = GENERATION_SEQUENCE[currentIdx];
+          setTimeout(() => {
+            setGeneratedSections(prev => [...prev, step.id]);
+            setCompletedMessages(prev => [
+              ...prev,
+              `${NAV_ITEMS.find(n => n.id === step.id)?.label} generated`,
+            ]);
+            currentIdx++;
+            nextStep();
+          }, 300);
+        } else {
+          setGeneratingStatus(null);
+          setIsGenerating(false);
+        }
+      };
+      nextStep();
+      
+    } catch (error: any) {
+      console.error(error);
+      alert(error.message || "Failed to generate research. Did you provide an OpenAI key in .env.local?");
+      setIsGenerating(false);
+      setGeneratingStatus(null);
+    }
   };
 
   if (!data && !isGenerating) {
