@@ -92,36 +92,37 @@ export const dbService = {
     return DUMMY_WORKSPACES;
   },
 
-  async createWorkspace(
-    title: string,
-    description: string,
-    origin_analysis_id?: string
-  ): Promise<Workspace> {
+  // MERGED: keeps localStorage fallback from mine, adds origin_analysis_id support from Krish's version
+  async createWorkspace(title: string, description: string, origin_analysis_id?: string): Promise<Workspace> {
+    const newWs: Workspace = {
+      id: "ws-" + Math.random().toString(36).substr(2, 9),
+      user_id: "user-1",
+      title,
+      description,
+      is_pinned: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      topics_count: 0,
+      origin_analysis_id
+    };
 
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
         .from("workspaces")
-        .insert({
-          title,
-          description,
-          origin_analysis_id,
-        })
+        .insert({ title, description, origin_analysis_id })
         .select()
         .single();
-
-      console.log("CREATE WORKSPACE DATA:", data);
-      console.log("CREATE WORKSPACE ERROR:", error);
-
-      if (error) {
-        throw error;
-      }
-
-      if (data) {
-        return data as Workspace;
-      }
+      if (!error && data) return data as Workspace;
+      if (error) console.error("Error creating workspace:", error);
     }
 
-    throw new Error("Supabase is not configured");
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.WORKSPACES);
+      const workspaces = stored ? JSON.parse(stored) : [...DUMMY_WORKSPACES];
+      workspaces.unshift(newWs);
+      localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(workspaces));
+    }
+    return newWs;
   },
 
   async renameWorkspace(id: string, newTitle: string): Promise<Workspace | null> {
@@ -152,68 +153,6 @@ export const dbService = {
     return null;
   },
 
-  async deleteWorkspace(id: string): Promise<boolean> {
-    if (isSupabaseConfigured()) {
-      const { data, error } = await supabase
-        .from("workspaces")
-        .delete()
-        .eq("id", id)
-        .select();
-
-      console.log("DELETE DATA:", data);
-      console.log("DELETE ERROR:", error);
-
-      if (!error) {
-        notifyWorkspaceChange();
-        return true;
-      }
-    }
-
-    if (isClient) {
-      // 1. Get topics for this workspace to delete its contents
-      const topics = await this.getTopics(id);
-      const topicIds = topics.map(t => t.id);
-
-      // 2. Remove from workspaces
-      const storedWs = localStorage.getItem(KEYS.WORKSPACES);
-      if (storedWs) {
-        const workspaces = JSON.parse(storedWs) as Workspace[];
-        localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(workspaces.filter(ws => ws.id !== id)));
-      }
-
-      // 3. Remove topics
-      const storedTopics = localStorage.getItem(KEYS.TOPICS);
-      if (storedTopics) {
-        const t = JSON.parse(storedTopics) as ResearchTopic[];
-        localStorage.setItem(KEYS.TOPICS, JSON.stringify(t.filter(topic => topic.workspace_id !== id)));
-      }
-
-      // 4. Remove associated references, notes, scripts
-      if (topicIds.length > 0) {
-        const storedRefs = localStorage.getItem(KEYS.REFERENCES);
-        if (storedRefs) {
-          const r = JSON.parse(storedRefs) as Reference[];
-          localStorage.setItem(KEYS.REFERENCES, JSON.stringify(r.filter(ref => !topicIds.includes(ref.topic_id))));
-        }
-
-        const storedNotes = localStorage.getItem(KEYS.NOTES);
-        if (storedNotes) {
-          const n = JSON.parse(storedNotes) as ResearchNote[];
-          localStorage.setItem(KEYS.NOTES, JSON.stringify(n.filter(note => !topicIds.includes(note.topic_id))));
-        }
-
-        const storedScripts = localStorage.getItem(KEYS.SCRIPTS);
-        if (storedScripts) {
-          const s = JSON.parse(storedScripts) as GeneratedScript[];
-          localStorage.setItem(KEYS.SCRIPTS, JSON.stringify(s.filter(script => !topicIds.includes(script.topic_id))));
-        }
-      }
-      notifyWorkspaceChange();
-      return true;
-    }
-    return false;
-  },
-
   async togglePinWorkspace(id: string): Promise<Workspace | null> {
     if (isSupabaseConfigured()) {
       // Fetch current state
@@ -238,12 +177,108 @@ export const dbService = {
           workspaces[idx].is_pinned = !workspaces[idx].is_pinned;
           workspaces[idx].updated_at = new Date().toISOString();
           localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(workspaces));
-          notifyWorkspaceChange();
           return workspaces[idx];
         }
       }
     }
     return null;
+  },
+
+  async updateWorkspace(id: string, updates: Partial<Workspace>): Promise<Workspace | null> {
+    const safeUpdates = { ...updates, updated_at: new Date().toISOString() };
+    delete safeUpdates.id; // Don't allow updating ID
+
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("workspaces")
+        .update(safeUpdates)
+        .eq("id", id)
+        .select()
+        .single();
+      if (!error && data) return data as Workspace;
+      if (error) console.error("Error updating workspace:", error);
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.WORKSPACES);
+      if (stored) {
+        const workspaces = JSON.parse(stored) as Workspace[];
+        const idx = workspaces.findIndex(ws => ws.id === id);
+        if (idx !== -1) {
+          workspaces[idx] = { ...workspaces[idx], ...safeUpdates };
+          localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(workspaces));
+          return workspaces[idx];
+        }
+      }
+    }
+    return null;
+  },
+
+  // MERGED: uses Krish's more thorough cascading delete (topics/references/notes/scripts) +
+  // debug logging + notifyWorkspaceChange, on top of mine's structure
+  async deleteWorkspace(id: string): Promise<boolean> {
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("workspaces")
+        .delete()
+        .eq("id", id)
+        .select();
+
+      console.log("DELETE WORKSPACE DATA:", data);
+      console.log("DELETE WORKSPACE ERROR:", error);
+
+      if (!error) {
+        notifyWorkspaceChange();
+        return true;
+      }
+      console.error("Error deleting workspace:", error);
+      return false;
+    }
+
+    if (isClient) {
+      // 1. Get topics for this workspace to clean up dependent local data
+      const topics = await this.getTopics(id);
+      const topicIds = topics.map(t => t.id);
+
+      // 2. Remove the workspace itself
+      const storedWs = localStorage.getItem(KEYS.WORKSPACES);
+      if (storedWs) {
+        const workspaces = JSON.parse(storedWs) as Workspace[];
+        localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(workspaces.filter(ws => ws.id !== id)));
+      }
+
+      // 3. Remove topics belonging to this workspace
+      const storedTopics = localStorage.getItem(KEYS.TOPICS);
+      if (storedTopics) {
+        const t = JSON.parse(storedTopics) as ResearchTopic[];
+        localStorage.setItem(KEYS.TOPICS, JSON.stringify(t.filter(topic => topic.workspace_id !== id)));
+      }
+
+      // 4. Remove references, notes, scripts tied to those topics
+      if (topicIds.length > 0) {
+        const storedRefs = localStorage.getItem(KEYS.REFERENCES);
+        if (storedRefs) {
+          const r = JSON.parse(storedRefs) as Reference[];
+          localStorage.setItem(KEYS.REFERENCES, JSON.stringify(r.filter(ref => !topicIds.includes(ref.topic_id))));
+        }
+
+        const storedNotes = localStorage.getItem(KEYS.NOTES);
+        if (storedNotes) {
+          const n = JSON.parse(storedNotes) as ResearchNote[];
+          localStorage.setItem(KEYS.NOTES, JSON.stringify(n.filter(note => !topicIds.includes(note.topic_id))));
+        }
+
+        const storedScripts = localStorage.getItem(KEYS.SCRIPTS);
+        if (storedScripts) {
+          const s = JSON.parse(storedScripts) as GeneratedScript[];
+          localStorage.setItem(KEYS.SCRIPTS, JSON.stringify(s.filter(script => !topicIds.includes(script.topic_id))));
+        }
+      }
+
+      notifyWorkspaceChange();
+      return true;
+    }
+    return false;
   },
 
   // TOPICS
@@ -276,37 +311,126 @@ export const dbService = {
     return DUMMY_TOPICS.filter(t => t.workspace_id === workspaceId);
   },
 
-  async createTopic(
-    workspaceId: string,
-    title: string,
-    description: string
-  ): Promise<ResearchTopic> {
+  async createTopic(workspaceId: string, title: string, description: string): Promise<ResearchTopic> {
+    const newTopic: ResearchTopic = {
+      id: "topic-" + Math.random().toString(36).substr(2, 9),
+      workspace_id: workspaceId,
+      title,
+      description,
+      status: "draft",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      references_count: 0,
+      notes_count: 0
+    };
 
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
         .from("research_topics")
-        .insert({
-          workspace_id: workspaceId,
-          title,
-          description,
-          status: "draft",
-        })
+        .insert({ workspace_id: workspaceId, title, description, status: "draft" })
         .select()
         .single();
+      if (!error && data) return data as ResearchTopic;
+      if (error) console.error("Supabase Error in createTopic:", error);
+    }
 
-      console.log("CREATE TOPIC DATA:", data);
-      console.log("CREATE TOPIC ERROR:", error);
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.TOPICS);
+      const topics = stored ? JSON.parse(stored) : [...DUMMY_TOPICS];
+      topics.unshift(newTopic);
+      localStorage.setItem(KEYS.TOPICS, JSON.stringify(topics));
+    }
+    return newTopic;
+  },
 
-      if (error) {
-        throw error;
+  async updateTopic(id: string, updates: Partial<ResearchTopic>): Promise<ResearchTopic | null> {
+    const safeUpdates = { ...updates, updated_at: new Date().toISOString() };
+    delete safeUpdates.id;
+
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("research_topics")
+        .update(safeUpdates)
+        .eq("id", id)
+        .select()
+        .single();
+      if (!error && data) return data as ResearchTopic;
+      if (error) console.error("Error updating topic:", error);
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.TOPICS);
+      if (stored) {
+        const topics = JSON.parse(stored) as ResearchTopic[];
+        const idx = topics.findIndex(t => t.id === id);
+        if (idx !== -1) {
+          topics[idx] = { ...topics[idx], ...safeUpdates };
+          localStorage.setItem(KEYS.TOPICS, JSON.stringify(topics));
+          this.touchWorkspace(topics[idx].workspace_id);
+          return topics[idx];
+        }
       }
+    }
+    return null;
+  },
 
-      if (data) {
-        return data as ResearchTopic;
+  async updateTopicResearchData(id: string, researchData: any): Promise<boolean> {
+    const safeUpdates = { research_data: researchData, updated_at: new Date().toISOString() };
+
+    if (isSupabaseConfigured()) {
+      const { error } = await supabase
+        .from("research_topics")
+        .update(safeUpdates)
+        .eq("id", id);
+      if (error) {
+        console.error("Error updating research data:", error);
+        return false;
+      }
+      return true;
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.TOPICS);
+      if (stored) {
+        const topics = JSON.parse(stored) as ResearchTopic[];
+        const idx = topics.findIndex(t => t.id === id);
+        if (idx !== -1) {
+          topics[idx] = { ...topics[idx], ...safeUpdates };
+          localStorage.setItem(KEYS.TOPICS, JSON.stringify(topics));
+          this.touchWorkspace(topics[idx].workspace_id);
+          return true;
+        }
+      }
+    }
+    return false;
+  },
+
+  async deleteTopic(id: string): Promise<boolean> {
+    if (isSupabaseConfigured()) {
+      const { error } = await supabase
+        .from("research_topics")
+        .delete()
+        .eq("id", id);
+      if (error) {
+        console.error("Error deleting topic:", error);
+        return false;
       }
     }
 
-    throw new Error("Supabase is not configured");
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.TOPICS);
+      if (stored) {
+        const topics = JSON.parse(stored) as ResearchTopic[];
+        const idx = topics.findIndex(t => t.id === id);
+        if (idx !== -1) {
+          const wsId = topics[idx].workspace_id;
+          const filtered = topics.filter(t => t.id !== id);
+          localStorage.setItem(KEYS.TOPICS, JSON.stringify(filtered));
+          this.touchWorkspace(wsId);
+        }
+      }
+    }
+    return true;
   },
 
   // REFERENCES
@@ -317,7 +441,13 @@ export const dbService = {
         .select("*")
         .eq("topic_id", topicId)
         .order("created_at", { ascending: false });
-      if (!error && data) return data as Reference[];
+      if (!error && data) {
+        return data.map((d: any) => ({
+          ...d,
+          type: d.source_type,
+          summary: d.notes
+        })) as Reference[];
+      }
     }
 
     if (isClient) {
@@ -339,7 +469,6 @@ export const dbService = {
       type,
       raw_content: rawContent,
       summary: url ? `Analyzed summary of references linked at ${url}. Key insights extracted.` : "Manually added source document content notes.",
-      status: "analyzed",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -347,16 +476,17 @@ export const dbService = {
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
         .from("research_references")
-        .insert({
-          topic_id: topicId,
-          title,
-          url,
-          source_type: type,
-          notes: newRef.summary
-        })
+        .insert({ topic_id: topicId, title, url: url, source_type: type, raw_content: rawContent, notes: newRef.summary })
         .select()
         .single();
-      if (!error && data) return data as Reference;
+      if (!error && data) {
+        return {
+          ...data,
+          type: data.source_type,
+          summary: data.notes
+        } as Reference;
+      }
+      if (error) console.error("Supabase Error in addReference:", error);
     }
 
     if (isClient) {
@@ -369,6 +499,82 @@ export const dbService = {
       this.touchTopic(topicId);
     }
     return newRef;
+  },
+
+  async updateReference(id: string, updates: Partial<Reference>): Promise<Reference | null> {
+    const safeUpdates = { ...updates };
+    delete safeUpdates.id;
+
+    // Map local 'type' and 'summary' to DB 'source_type' and 'notes'
+    const dbUpdates: any = { ...safeUpdates };
+    if (dbUpdates.type !== undefined) {
+      dbUpdates.source_type = dbUpdates.type;
+      delete dbUpdates.type;
+    }
+    if (dbUpdates.summary !== undefined) {
+      dbUpdates.notes = dbUpdates.summary;
+      delete dbUpdates.summary;
+    }
+
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("research_references")
+        .update(dbUpdates)
+        .eq("id", id)
+        .select()
+        .single();
+      if (!error && data) {
+        return {
+          ...data,
+          type: data.source_type,
+          summary: data.notes
+        } as Reference;
+      }
+      if (error) console.error("Error updating reference:", error);
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.REFERENCES);
+      if (stored) {
+        const references = JSON.parse(stored) as Reference[];
+        const idx = references.findIndex(r => r.id === id);
+        if (idx !== -1) {
+          references[idx] = { ...references[idx], ...safeUpdates };
+          localStorage.setItem(KEYS.REFERENCES, JSON.stringify(references));
+          this.touchTopic(references[idx].topic_id);
+          return references[idx];
+        }
+      }
+    }
+    return null;
+  },
+
+  async deleteReference(id: string): Promise<boolean> {
+    if (isSupabaseConfigured()) {
+      const { error } = await supabase
+        .from("research_references")
+        .delete()
+        .eq("id", id);
+      if (error) {
+        console.error("Error deleting reference:", error);
+        return false;
+      }
+    }
+
+    if (isClient) {
+      const stored = localStorage.getItem(KEYS.REFERENCES);
+      if (stored) {
+        const references = JSON.parse(stored) as Reference[];
+        const idx = references.findIndex(r => r.id === id);
+        if (idx !== -1) {
+          const tId = references[idx].topic_id;
+          const filtered = references.filter(r => r.id !== id);
+          localStorage.setItem(KEYS.REFERENCES, JSON.stringify(filtered));
+          this.touchTopic(tId);
+        }
+      }
+    }
+    return true;
   },
 
   // WORKSPACE REFERENCES
@@ -828,9 +1034,6 @@ export const dbService = {
         return data as UrlAnalysis;
       }
 
-      console.log("SUPABASE ERROR:");
-      console.log(error);
-      console.log(JSON.stringify(error, null, 2));
       console.error("Failed to save analysis:", error);
     }
 

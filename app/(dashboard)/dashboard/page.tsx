@@ -24,6 +24,14 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { MoreVertical, Edit2, Trash2, AlertCircle } from "lucide-react";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -44,6 +52,14 @@ export default function DashboardPage() {
 
   const [userName, setUserName] = useState<string | null>(null);
   const [greeting, setGreeting] = useState("Good afternoon");
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Edit Workspace Modal State
+  const [editingWs, setEditingWs] = useState<Workspace | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
 
   // Smarter Workspace Creation State
   const [isResearchModalOpen, setIsResearchModalOpen] = useState(false);
@@ -66,6 +82,7 @@ export default function DashboardPage() {
   useEffect(() => {
     loadData();
     fetchUser();
+
     const pref = localStorage.getItem("workspace-creation-preference");
     if (pref) setWorkspaceCreationPreference(pref as any);
 
@@ -90,62 +107,91 @@ export default function DashboardPage() {
   }
 
   async function loadData() {
+    setIsLoading(true);
+    setError(null);
     try {
-      const ws = await dbService.getWorkspaces();
-
+      const res = await fetch("/api/workspaces");
+      if (!res.ok) throw new Error("Failed to fetch workspaces");
+      const ws: Workspace[] = await res.json();
       setWorkspaces(ws);
       setPinnedWorkspaces(ws.filter(w => w.is_pinned));
 
       const analyses = await dbService.getAnalyses();
       setRecentAnalyses(analyses.slice(0, 4));
 
-      const topicsArrays = await Promise.all(
-        ws.map((w) => dbService.getTopics(w.id))
-      );
-
-      const allTopics = topicsArrays.flat();
-
-      const refsArrays = await Promise.all(
-        allTopics.map((t) => dbService.getReferences(t.id))
-      );
-
-      const allRefs = refsArrays.flat();
-
-      allRefs.sort(
-        (a, b) =>
-          new Date(b.created_at).getTime() -
-          new Date(a.created_at).getTime()
-      );
-
+      // Load recent references from all topics
+      const allRefs: Reference[] = [];
+      for (const w of ws) {
+        const tRes = await fetch(`/api/topics?workspaceId=${w.id}`);
+        if (!tRes.ok) continue;
+        const topics: ResearchTopic[] = await tRes.json();
+        for (const t of topics) {
+          const rRes = await fetch(`/api/references?topicId=${t.id}`);
+          if (!rRes.ok) continue;
+          const refs: Reference[] = await rRes.json();
+          allRefs.push(...refs);
+        }
+      }
+      // Sort by created date desc and take top 4
+      allRefs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setRecentReferences(allRefs.slice(0, 4));
     } catch (err) {
-      console.error("Dashboard load failed:", err);
+      console.error(err);
+      setError("Failed to load workspaces. Please try again.");
+    } finally {
+      setIsLoading(false);
     }
   }
 
   async function handleCreateWorkspace() {
     const title = prompt("Enter workspace name:");
     if (!title?.trim()) return;
-
-    try {
-      const newWs = await dbService.createWorkspace(
-        title.trim(),
-        "Newly created research hub."
-      );
-
-      await loadData();
-
-      router.push(`/workspace/${newWs.id}`);
-    } catch (err) {
-      console.error("Failed to create workspace:", err);
-    }
+    const res = await fetch("/api/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title.trim(), description: "Newly created research hub." })
+    });
+    if (!res.ok) return;
+    const newWs = await res.json();
+    loadData();
+    router.push(`/workspace/${newWs.id}`);
   }
   async function handleTogglePin(id: string) {
-    try {
-      await dbService.togglePinWorkspace(id);
-      await loadData();
-    } catch (err) {
-      console.error("Failed to toggle pin:", err);
+    const ws = workspaces.find(w => w.id === id);
+    if (!ws) return;
+    await fetch(`/api/workspaces/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_pinned: !ws.is_pinned })
+    });
+    loadData();
+  }
+
+  async function handleDeleteWorkspace(id: string) {
+    if (!confirm("Are you sure you want to delete this workspace?")) return;
+    const res = await fetch(`/api/workspaces/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      loadData();
+    } else {
+      alert("Failed to delete workspace.");
+    }
+  }
+
+  async function handleSaveEdit() {
+    if (!editingWs || !editTitle.trim()) return;
+    const res = await fetch(`/api/workspaces/${editingWs.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: editTitle.trim(),
+        description: editDescription.trim(),
+      })
+    });
+    if (res.ok) {
+      setEditingWs(null);
+      loadData();
+    } else {
+      alert("Failed to update workspace.");
     }
   }
 
@@ -168,27 +214,26 @@ export default function DashboardPage() {
         const title = searchInput.trim();
 
         if (workspaceCreationPreference === "always_new") {
-          const targetWs = await dbService.createWorkspace(
-            title,
-            "Automatically generated research workspace."
-          );
+          const wsRes = await fetch("/api/workspaces", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title, description: "Automatically generated research workspace." })
+          });
+          const targetWs = await wsRes.json();
 
-          const targetTopic = await dbService.createTopic(
-            targetWs.id,
-            title,
-            "Primary research thread."
-          );
-
-          await loadData();
+          const topRes = await fetch("/api/topics", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workspace_id: targetWs.id, title, description: "Primary research thread." })
+          });
+          const targetTopic = await topRes.json();
 
           setSubmitStatus("Workspace created! Redirecting...");
           setSearchInput("");
-
           setTimeout(() => {
             setSubmitStatus(null);
-            router.push(
-              `/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`
-            );
+            loadData();
+            router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
           }, 800);
         } else {
           setResearchQuery(title);
@@ -219,21 +264,51 @@ export default function DashboardPage() {
 
   async function handleCreateNewWorkspaceFromModal() {
     setIsCreatingResearch(true);
-    const targetWs = await dbService.createWorkspace(researchQuery, "Automatically generated research workspace.");
-    const targetTopic = await dbService.createTopic(targetWs.id, researchQuery, "Primary research thread.");
-    setSearchInput("");
-    setIsResearchModalOpen(false);
-    loadData();
-    router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
+    try {
+      const wsRes = await fetch("/api/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: researchQuery, description: "Automatically generated research workspace." })
+      });
+      const targetWs = await wsRes.json();
+
+      const topRes = await fetch("/api/topics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: targetWs.id, title: researchQuery, description: "Primary research thread." })
+      });
+      const targetTopic = await topRes.json();
+
+      setSearchInput("");
+      setIsResearchModalOpen(false);
+      loadData();
+      router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
+    } catch (err) {
+      console.error("Failed to create workspace:", err);
+    } finally {
+      setIsCreatingResearch(false);
+    }
   }
 
   async function handleAddToExistingWorkspace(wsId: string) {
     setIsCreatingResearch(true);
-    const targetTopic = await dbService.createTopic(wsId, researchQuery, "Primary research thread.");
-    setSearchInput("");
-    setIsResearchModalOpen(false);
-    loadData();
-    router.push(`/workspace/${wsId}?topic=${targetTopic.id}&tab=research`);
+    try {
+      const topRes = await fetch("/api/topics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: wsId, title: researchQuery, description: "Primary research thread." })
+      });
+      const targetTopic = await topRes.json();
+
+      setSearchInput("");
+      setIsResearchModalOpen(false);
+      loadData();
+      router.push(`/workspace/${wsId}?topic=${targetTopic.id}&tab=research`);
+    } catch (err) {
+      console.error("Failed to add to workspace:", err);
+    } finally {
+      setIsCreatingResearch(false);
+    }
   }
 
   function handlePrefChange(val: "ask" | "always_new") {
@@ -459,21 +534,69 @@ export default function DashboardPage() {
           <span>Active & Pinned Workspaces</span>
         </div>
 
-        {workspaces.length > 0 ? (
+        {error ? (
+          <div className="py-12 border border-red-500/20 bg-red-500/10 rounded-[var(--radius)] text-center text-red-500 flex flex-col items-center">
+            <AlertCircle className="w-8 h-8 mb-2" />
+            <p className="text-sm font-semibold">{error}</p>
+            <Button variant="outline" onClick={loadData} className="mt-4 text-xs h-8">
+              Try Again
+            </Button>
+          </div>
+        ) : isLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {[...Array(6)].map((_, i) => (
+              <Card key={i} className="p-5 min-h-[120px] flex flex-col justify-between border-border bg-card">
+                <div>
+                  <div className="flex justify-between items-start">
+                    <Skeleton className="h-4 w-3/4 mb-3" />
+                    <Skeleton className="h-4 w-4" />
+                  </div>
+                  <Skeleton className="h-3 w-full mb-1" />
+                  <Skeleton className="h-3 w-2/3" />
+                </div>
+                <div className="flex justify-between mt-4">
+                  <Skeleton className="h-3 w-1/3" />
+                  <Skeleton className="h-3 w-1/4" />
+                </div>
+              </Card>
+            ))}
+          </div>
+        ) : workspaces.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {workspaces.slice(0, 6).map(ws => (
               <Card key={ws.id} className="hover:border-primary/20 bg-card border-border transition-all p-5 rounded-[var(--radius)] relative flex flex-col justify-between min-h-[120px] group">
                 <div>
                   <div className="flex items-start justify-between gap-2">
-                    <Link href={`/workspace/${ws.id}`} className="hover:text-primary transition-colors">
+                    <Link href={`/workspace/${ws.id}`} className="hover:text-primary transition-colors flex-1 pr-2">
                       <h3 className="text-xs font-bold text-foreground line-clamp-1">{ws.title}</h3>
                     </Link>
-                    <button
-                      onClick={() => handleTogglePin(ws.id)}
-                      className="p-1 rounded-[calc(var(--radius)-4px)] hover:bg-[#141414] text-muted-foreground group-hover:opacity-100 transition-opacity"
-                    >
-                      <Pin className={`w-3.5 h-3.5 ${ws.is_pinned ? "fill-primary text-primary" : "text-muted-foreground/60"}`} />
-                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => handleTogglePin(ws.id)}
+                        className="p-1 rounded-[calc(var(--radius)-4px)] hover:bg-[#141414] text-muted-foreground group-hover:opacity-100 transition-opacity"
+                      >
+                        <Pin className={`w-3.5 h-3.5 ${ws.is_pinned ? "fill-primary text-primary" : "text-muted-foreground/60"}`} />
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger className="p-1 rounded-[calc(var(--radius)-4px)] hover:bg-[#141414] text-muted-foreground group-hover:opacity-100 transition-opacity outline-none cursor-pointer">
+                          <MoreVertical className="w-3.5 h-3.5" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => {
+                            setEditingWs(ws);
+                            setEditTitle(ws.title);
+                            setEditDescription(ws.description || "");
+                          }}>
+                            <Edit2 className="w-4 h-4 mr-2" />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-red-500 focus:text-red-500" onClick={() => handleDeleteWorkspace(ws.id)}>
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </div>
                   <p className="text-[11px] text-muted-foreground/80 mt-1.5 line-clamp-2 leading-relaxed">
                     {ws.description || "No description provided."}
@@ -501,7 +624,7 @@ export default function DashboardPage() {
       </div>
 
       {/* References and Logs Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
         {/* Recent Analyses */}
         <div className="bg-card border border-border rounded-[var(--radius)] p-5">

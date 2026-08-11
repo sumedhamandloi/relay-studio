@@ -1,39 +1,22 @@
-import { NextRequest, NextResponse } from "next/server";
-import { workspaceService } from "@/services/workspace.service";
+//adding comment to stage changes in route.ts
+import { NextResponse } from "next/server";
+import { WorkspaceService } from "@/lib/services/workspace.service";
 
 export async function GET() {
   try {
-    const workspaces = await workspaceService.getAllWorkspaces();
-    return NextResponse.json({ success: true, data: workspaces });
+    const workspaces = await WorkspaceService.getWorkspaces();
+    return NextResponse.json(workspaces);
   } catch (error: any) {
-    console.error("GET /api/workspaces error:", error);
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const workspace = await workspaceService.createWorkspace(body);
-    
-    return NextResponse.json(
-      { success: true, data: workspace },
-      { status: 201 }
-    );
+    const workspace = await WorkspaceService.createWorkspace(body.title, body.description);
+    return NextResponse.json(workspace, { status: 201 });
   } catch (error: any) {
-    console.error("POST /api/workspaces error:", error);
-    
-    // Simple heuristic for validation vs server errors
-    const status = error.message.includes("cannot be empty") || error.message.includes("is required") 
-      ? 400 
-      : 500;
-
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status }
-    );
+    return NextResponse.json({ error: error.message }, { status: 400 });
   }
 }

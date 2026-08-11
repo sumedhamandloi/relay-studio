@@ -13,10 +13,10 @@ export interface Workspace {
   title: string;
   description?: string;
   is_pinned: boolean;
+  origin_analysis_id?: string;
   created_at: string;
   updated_at: string;
   topics_count?: number;
-  origin_analysis_id?: string;
 }
 
 export type TopicStatus = "draft" | "in_progress" | "completed";
@@ -31,6 +31,7 @@ export interface ResearchTopic {
   updated_at: string;
   references_count?: number;
   notes_count?: number;
+  research_data?: any; // JSONB storage for generated insights
 }
 
 export type ReferenceType = "link" | "youtube" | "reddit" | "pdf" | "document";
