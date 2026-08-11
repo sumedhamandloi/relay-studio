@@ -61,6 +61,13 @@ export default function DashboardPage() {
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
 
+  // Smarter Workspace Creation State
+  const [isResearchModalOpen, setIsResearchModalOpen] = useState(false);
+  const [researchQuery, setResearchQuery] = useState("");
+  const [wsSearchQuery, setWsSearchQuery] = useState("");
+  const [workspaceCreationPreference, setWorkspaceCreationPreference] = useState<"ask" | "always_new" | "always_last">("ask");
+  const [isCreatingResearch, setIsCreatingResearch] = useState(false);
+
   useEffect(() => {
     const hour = new Date().getHours();
     if (hour >= 5 && hour < 12) {
@@ -75,6 +82,13 @@ export default function DashboardPage() {
   useEffect(() => {
     loadData();
     fetchUser();
+    
+    const pref = localStorage.getItem("workspace-creation-preference");
+    if (pref) setWorkspaceCreationPreference(pref as any);
+
+    const handleUpdate = () => loadData();
+    window.addEventListener("workspaces-updated", handleUpdate);
+    return () => window.removeEventListener("workspaces-updated", handleUpdate);
   }, []);
 
   async function fetchUser() {
@@ -199,27 +213,34 @@ export default function DashboardPage() {
     try {
       if (searchMode === "research") {
         const title = searchInput.trim();
-        const wsRes = await fetch("/api/workspaces", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title, description: "Automatically generated research workspace." })
-        });
-        const targetWs = await wsRes.json();
         
-        const topRes = await fetch("/api/topics", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ workspace_id: targetWs.id, title, description: "Primary research thread." })
-        });
-        const targetTopic = await topRes.json();
-        
-        setSubmitStatus("Workspace created! Redirecting...");
-        setSearchInput("");
-        setTimeout(() => {
-          setSubmitStatus(null);
-          loadData();
-          router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
-        }, 800);
+        if (workspaceCreationPreference === "always_new") {
+          const wsRes = await fetch("/api/workspaces", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title, description: "Automatically generated research workspace." })
+          });
+          const targetWs = await wsRes.json();
+          
+          const topRes = await fetch("/api/topics", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workspace_id: targetWs.id, title, description: "Primary research thread." })
+          });
+          const targetTopic = await topRes.json();
+          
+          setSubmitStatus("Workspace created! Redirecting...");
+          setSearchInput("");
+          setTimeout(() => {
+            setSubmitStatus(null);
+            loadData();
+            router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
+          }, 800);
+        } else {
+          setResearchQuery(title);
+          setIsResearchModalOpen(true);
+          setIsSubmitting(false);
+        }
       } else {
         const cleanUrl = searchInput.trim();
         const existing = await dbService.getAnalysisByUrl(cleanUrl);
@@ -241,6 +262,62 @@ export default function DashboardPage() {
       setIsSubmitting(false);
     }
   }
+
+  async function handleCreateNewWorkspaceFromModal() {
+    setIsCreatingResearch(true);
+    try {
+      const wsRes = await fetch("/api/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: researchQuery, description: "Automatically generated research workspace." })
+      });
+      const targetWs = await wsRes.json();
+      
+      const topRes = await fetch("/api/topics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: targetWs.id, title: researchQuery, description: "Primary research thread." })
+      });
+      const targetTopic = await topRes.json();
+      
+      setSearchInput("");
+      setIsResearchModalOpen(false);
+      loadData();
+      router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
+    } catch (err) {
+      console.error("Failed to create workspace:", err);
+    } finally {
+      setIsCreatingResearch(false);
+    }
+  }
+
+  async function handleAddToExistingWorkspace(wsId: string) {
+    setIsCreatingResearch(true);
+    try {
+      const topRes = await fetch("/api/topics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: wsId, title: researchQuery, description: "Primary research thread." })
+      });
+      const targetTopic = await topRes.json();
+      
+      setSearchInput("");
+      setIsResearchModalOpen(false);
+      loadData();
+      router.push(`/workspace/${wsId}?topic=${targetTopic.id}&tab=research`);
+    } catch (err) {
+      console.error("Failed to add to workspace:", err);
+    } finally {
+      setIsCreatingResearch(false);
+    }
+  }
+
+  function handlePrefChange(val: "ask" | "always_new") {
+    setWorkspaceCreationPreference(val);
+    localStorage.setItem("workspace-creation-preference", val);
+  }
+
+  const filteredModalWorkspaces = workspaces.filter(ws => ws.title.toLowerCase().includes(wsSearchQuery.toLowerCase()));
 
   return (
     <div className="flex-1 p-6 md:p-10 max-w-5xl mx-auto w-full space-y-8 select-none">
@@ -699,6 +776,117 @@ export default function DashboardPage() {
           </Card>
         </div>
       )}
+
+      {/* Smarter Workspace Creation Modal */}
+      <AnimatePresence>
+        {isResearchModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+              onClick={() => !isCreatingResearch && setIsResearchModalOpen(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-lg bg-card border border-border rounded-xl shadow-xl overflow-hidden flex flex-col max-h-[80vh]"
+            >
+              <div className="p-5 border-b border-border/50 bg-muted/20">
+                <h3 className="text-lg font-bold text-foreground">Where would you like to save this research?</h3>
+                <p className="text-xs text-muted-foreground mt-1">
+                  You searched for: <span className="font-semibold text-primary">"{researchQuery}"</span>
+                </p>
+              </div>
+
+              <div className="p-5 flex-1 overflow-y-auto space-y-6">
+
+                {/* Option 1: Create New */}
+                <div>
+                  <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Option 1</h4>
+                  <button
+                    onClick={handleCreateNewWorkspaceFromModal}
+                    disabled={isCreatingResearch}
+                    className="w-full flex items-center justify-between p-4 rounded-lg border border-border bg-card hover:border-primary/50 hover:bg-primary/5 transition-all text-left group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                        <FolderClosed className="w-5 h-5 text-primary" />
+                      </div>
+                      <div>
+                        <span className="text-sm font-bold block mb-0.5">Create New Workspace</span>
+                        <span className="text-[10px] text-muted-foreground">Start a brand new research hub.</span>
+                      </div>
+                    </div>
+                    <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                  </button>
+                </div>
+
+                {/* Option 2: Add to Existing */}
+                <div>
+                  <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Option 2: Add to Existing Workspace</h4>
+
+                  <div className="relative mb-3">
+                    <Search className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground/60" />
+                    <input
+                      type="text"
+                      placeholder="Search workspaces..."
+                      value={wsSearchQuery}
+                      onChange={(e) => setWsSearchQuery(e.target.value)}
+                      className="w-full text-xs bg-muted/40 border border-border rounded-md pl-9 pr-3 py-2.5 focus:outline-none focus:border-primary text-foreground"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5 max-h-[200px] overflow-y-auto pr-1">
+                    {filteredModalWorkspaces.length > 0 ? (
+                      filteredModalWorkspaces.map(ws => (
+                        <button
+                          key={ws.id}
+                          onClick={() => handleAddToExistingWorkspace(ws.id)}
+                          disabled={isCreatingResearch}
+                          className="w-full flex items-center justify-between p-2.5 rounded border border-transparent hover:border-border hover:bg-muted/50 transition-all text-left group"
+                        >
+                          <div className="flex items-center gap-2 overflow-hidden">
+                            <FolderClosed className="w-4 h-4 text-muted-foreground group-hover:text-foreground shrink-0" />
+                            <span className="text-xs font-semibold text-foreground truncate">{ws.title}</span>
+                          </div>
+                          <span className="text-[10px] text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">Select</span>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="text-center text-[11px] text-muted-foreground py-4">No matching workspaces.</p>
+                    )}
+                  </div>
+                </div>
+
+              </div>
+
+              <div className="p-4 border-t border-border/50 bg-muted/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="w-3.5 h-3.5 rounded border-border text-primary focus:ring-primary"
+                    checked={workspaceCreationPreference === "always_new"}
+                    onChange={(e) => handlePrefChange(e.target.checked ? "always_new" : "ask")}
+                  />
+                  <span className="text-[10px] font-medium text-muted-foreground">Always create a new workspace</span>
+                </label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsResearchModalOpen(false)}
+                  disabled={isCreatingResearch}
+                  className="h-8 text-xs font-semibold"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

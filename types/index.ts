@@ -13,6 +13,7 @@ export interface Workspace {
   title: string;
   description?: string;
   is_pinned: boolean;
+  origin_analysis_id?: string;
   created_at: string;
   updated_at: string;
   topics_count?: number;
@@ -43,6 +44,7 @@ export interface Reference {
   type: ReferenceType;
   raw_content?: string;
   summary?: string;
+  status?: "processing" | "failed" | "analyzed";
   created_at: string;
   updated_at: string;
 }
