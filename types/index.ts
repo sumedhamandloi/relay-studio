@@ -44,7 +44,7 @@ export interface Reference {
   type: ReferenceType;
   raw_content?: string;
   summary?: string;
-  status?: "processing" | "failed" | "analyzed";
+  status?: "analyzed" | "processing" | "failed";
   created_at: string;
   updated_at: string;
 }
@@ -95,25 +95,25 @@ export interface Integration {
 export interface UrlAnalysis {
   id: string;
   url: string;
-  type: string;
-  title: string;
+  type: "youtube" | "reddit" | "github" | "generic";
+  title?: string;
   creator?: string;
   publish_date?: string;
   duration?: string;
   language?: string;
   primary_topic?: string;
-  overview?: any;
-  main_ideas?: any;
-  detailed_breakdown?: any;
+  overview?: string[];
+  main_ideas?: { heading: string, explanation: string }[];
+  detailed_breakdown?: { section: string, content: string }[];
   reading_time_saved?: string;
   short_summary?: string;
-  key_takeaways?: any;
-  timeline?: any;
-  important_quotes?: any;
+  key_takeaways?: string[];
+  timeline?: { timestamp: string, description: string }[];
+  important_quotes?: string[];
   topics_covered?: string[];
   people_mentioned?: string[];
   technologies_mentioned?: string[];
   resources_mentioned?: string[];
-  status: string;
+  status?: "analyzed" | "processing" | "failed";
   created_at: string;
 }

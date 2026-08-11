@@ -92,7 +92,8 @@ export const dbService = {
     return DUMMY_WORKSPACES;
   },
 
-  async createWorkspace(title: string, description: string): Promise<Workspace> {
+  // MERGED: keeps localStorage fallback from mine, adds origin_analysis_id support from Krish's version
+  async createWorkspace(title: string, description: string, origin_analysis_id?: string): Promise<Workspace> {
     const newWs: Workspace = {
       id: "ws-" + Math.random().toString(36).substr(2, 9),
       user_id: "user-1",
@@ -101,16 +102,18 @@ export const dbService = {
       is_pinned: false,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-      topics_count: 0
+      topics_count: 0,
+      origin_analysis_id
     };
 
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
         .from("workspaces")
-        .insert({ title, description })
+        .insert({ title, description, origin_analysis_id })
         .select()
         .single();
       if (!error && data) return data as Workspace;
+      if (error) console.error("Error creating workspace:", error);
     }
 
     if (isClient) {
@@ -211,27 +214,71 @@ export const dbService = {
     return null;
   },
 
+  // MERGED: uses Krish's more thorough cascading delete (topics/references/notes/scripts) +
+  // debug logging + notifyWorkspaceChange, on top of mine's structure
   async deleteWorkspace(id: string): Promise<boolean> {
     if (isSupabaseConfigured()) {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("workspaces")
         .delete()
-        .eq("id", id);
-      if (error) {
-        console.error("Error deleting workspace:", error);
-        return false;
+        .eq("id", id)
+        .select();
+
+      console.log("DELETE WORKSPACE DATA:", data);
+      console.log("DELETE WORKSPACE ERROR:", error);
+
+      if (!error) {
+        notifyWorkspaceChange();
+        return true;
       }
+      console.error("Error deleting workspace:", error);
+      return false;
     }
 
     if (isClient) {
-      const stored = localStorage.getItem(KEYS.WORKSPACES);
-      if (stored) {
-        const workspaces = JSON.parse(stored) as Workspace[];
-        const filtered = workspaces.filter(ws => ws.id !== id);
-        localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(filtered));
+      // 1. Get topics for this workspace to clean up dependent local data
+      const topics = await this.getTopics(id);
+      const topicIds = topics.map(t => t.id);
+
+      // 2. Remove the workspace itself
+      const storedWs = localStorage.getItem(KEYS.WORKSPACES);
+      if (storedWs) {
+        const workspaces = JSON.parse(storedWs) as Workspace[];
+        localStorage.setItem(KEYS.WORKSPACES, JSON.stringify(workspaces.filter(ws => ws.id !== id)));
       }
+
+      // 3. Remove topics belonging to this workspace
+      const storedTopics = localStorage.getItem(KEYS.TOPICS);
+      if (storedTopics) {
+        const t = JSON.parse(storedTopics) as ResearchTopic[];
+        localStorage.setItem(KEYS.TOPICS, JSON.stringify(t.filter(topic => topic.workspace_id !== id)));
+      }
+
+      // 4. Remove references, notes, scripts tied to those topics
+      if (topicIds.length > 0) {
+        const storedRefs = localStorage.getItem(KEYS.REFERENCES);
+        if (storedRefs) {
+          const r = JSON.parse(storedRefs) as Reference[];
+          localStorage.setItem(KEYS.REFERENCES, JSON.stringify(r.filter(ref => !topicIds.includes(ref.topic_id))));
+        }
+
+        const storedNotes = localStorage.getItem(KEYS.NOTES);
+        if (storedNotes) {
+          const n = JSON.parse(storedNotes) as ResearchNote[];
+          localStorage.setItem(KEYS.NOTES, JSON.stringify(n.filter(note => !topicIds.includes(note.topic_id))));
+        }
+
+        const storedScripts = localStorage.getItem(KEYS.SCRIPTS);
+        if (storedScripts) {
+          const s = JSON.parse(storedScripts) as GeneratedScript[];
+          localStorage.setItem(KEYS.SCRIPTS, JSON.stringify(s.filter(script => !topicIds.includes(script.topic_id))));
+        }
+      }
+
+      notifyWorkspaceChange();
+      return true;
     }
-    return true;
+    return false;
   },
 
   // TOPICS
@@ -792,6 +839,8 @@ export const dbService = {
       }
     }
   },
+
+  // URL ANALYSES
   async getAnalyses(): Promise<UrlAnalysis[]> {
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
@@ -834,6 +883,7 @@ export const dbService = {
     const analyses = await this.getAnalyses();
     return analyses.find(a => a.url === url) || null;
   },
+
   async createAnalysis(url: string, type: "youtube" | "reddit" | "github" | "generic", title?: string): Promise<UrlAnalysis> {
     const existing = await this.getAnalysisByUrl(url);
     if (existing) return existing;
@@ -984,9 +1034,6 @@ export const dbService = {
         return data as UrlAnalysis;
       }
 
-      console.log("SUPABASE ERROR:");
-      console.log(error);
-      console.log(JSON.stringify(error, null, 2));
       console.error("Failed to save analysis:", error);
     }
 
@@ -1001,4 +1048,3 @@ export const dbService = {
     return newAnalysis;
   }
 };
-

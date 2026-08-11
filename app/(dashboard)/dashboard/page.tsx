@@ -41,7 +41,7 @@ export default function DashboardPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [pinnedWorkspaces, setPinnedWorkspaces] = useState<Workspace[]>([]);
   const [recentReferences, setRecentReferences] = useState<Reference[]>([]);
-  
+
   const [searchMode, setSearchMode] = useState<"research" | "analyze">("research");
   const [searchInput, setSearchInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -82,7 +82,7 @@ export default function DashboardPage() {
   useEffect(() => {
     loadData();
     fetchUser();
-    
+
     const pref = localStorage.getItem("workspace-creation-preference");
     if (pref) setWorkspaceCreationPreference(pref as any);
 
@@ -156,7 +156,6 @@ export default function DashboardPage() {
     loadData();
     router.push(`/workspace/${newWs.id}`);
   }
-
   async function handleTogglePin(id: string) {
     const ws = workspaces.find(w => w.id === id);
     if (!ws) return;
@@ -213,7 +212,7 @@ export default function DashboardPage() {
     try {
       if (searchMode === "research") {
         const title = searchInput.trim();
-        
+
         if (workspaceCreationPreference === "always_new") {
           const wsRes = await fetch("/api/workspaces", {
             method: "POST",
@@ -221,14 +220,14 @@ export default function DashboardPage() {
             body: JSON.stringify({ title, description: "Automatically generated research workspace." })
           });
           const targetWs = await wsRes.json();
-          
+
           const topRes = await fetch("/api/topics", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ workspace_id: targetWs.id, title, description: "Primary research thread." })
           });
           const targetTopic = await topRes.json();
-          
+
           setSubmitStatus("Workspace created! Redirecting...");
           setSearchInput("");
           setTimeout(() => {
@@ -272,14 +271,14 @@ export default function DashboardPage() {
         body: JSON.stringify({ title: researchQuery, description: "Automatically generated research workspace." })
       });
       const targetWs = await wsRes.json();
-      
+
       const topRes = await fetch("/api/topics", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspace_id: targetWs.id, title: researchQuery, description: "Primary research thread." })
       });
       const targetTopic = await topRes.json();
-      
+
       setSearchInput("");
       setIsResearchModalOpen(false);
       loadData();
@@ -300,7 +299,7 @@ export default function DashboardPage() {
         body: JSON.stringify({ workspace_id: wsId, title: researchQuery, description: "Primary research thread." })
       });
       const targetTopic = await topRes.json();
-      
+
       setSearchInput("");
       setIsResearchModalOpen(false);
       loadData();
@@ -343,7 +342,7 @@ export default function DashboardPage() {
       {/* Unified Search Section */}
       <div className="flex justify-center mb-6">
         <div className="w-full max-w-2xl bg-card/60 backdrop-blur-sm border border-border px-6 py-5 rounded-[var(--radius)] shadow-sm relative overflow-hidden">
-          
+
           {/* Segmented Toggle */}
           <div className="flex items-center justify-center mb-4">
             <div className="flex gap-4 relative">
@@ -413,7 +412,7 @@ export default function DashboardPage() {
                 )}
               </AnimatePresence>
             </div>
-            
+
             {/* Custom animated placeholder overlay */}
             {!searchInput && (
               <div className="absolute left-9 top-[11px] pointer-events-none flex items-center overflow-hidden text-muted-foreground/50 text-[13px]">
@@ -425,14 +424,14 @@ export default function DashboardPage() {
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.2 }}
                   >
-                    {searchMode === "research" 
-                      ? "Research AI Agents, System Design, Startups..." 
+                    {searchMode === "research"
+                      ? "Research AI Agents, System Design, Startups..."
                       : "Paste a YouTube, LinkedIn, X, Reddit or Instagram URL..."}
                   </motion.span>
                 </AnimatePresence>
               </div>
             )}
-            
+
             <input
               ref={inputRef}
               type={searchMode === "analyze" ? "url" : "text"}
@@ -460,7 +459,7 @@ export default function DashboardPage() {
                 </motion.span>
               </AnimatePresence>
             </Button>
-            
+
             {submitStatus && (
               <span className="absolute -bottom-5 left-4 text-[10px] font-medium text-primary">
                 {submitStatus}
@@ -719,63 +718,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Brand/Integration Info panel */}
-        <div className="bg-card border border-border rounded-[var(--radius)] p-5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center gap-1.5 text-xs font-bold text-foreground mb-4 border-b border-border/40 pb-2">
-              <Sparkles className="w-4 h-4 text-primary" />
-              <span>Brand Guidelines</span>
-            </div>
-            <div className="bg-muted/40 p-3 border border-border rounded-[calc(var(--radius)-4px)] space-y-2">
-              <span className="text-[10px] font-bold text-primary block">ACTIVE VOICE PROFILE</span>
-              <span className="text-xs font-bold text-foreground block">Tech Architect Voice</span>
-              <p className="text-[10px] text-muted-foreground leading-relaxed line-clamp-4">
-                Professional, dense, direct, highly technical, and calm. Explains complex concepts with zero fluff. Focuses on architecture, trade-offs, and metrics.
-              </p>
-            </div>
-          </div>
-          <Link href="/settings" className="mt-4">
-            <Button variant="outline" className="w-full h-8 text-[11px] font-bold">
-              Edit Voice Guidelines
-            </Button>
-          </Link>
-        </div>
       </div>
-
-      {/* Edit Workspace Modal */}
-      {editingWs && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-          <Card className="w-full max-w-md p-6 bg-card border-border shadow-lg">
-            <h2 className="text-lg font-bold mb-4">Edit Workspace</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="text-xs font-bold text-muted-foreground">Title</label>
-                <input
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  className="w-full mt-1 bg-muted/40 border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-primary"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-muted-foreground">Description</label>
-                <textarea
-                  value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
-                  className="w-full mt-1 bg-muted/40 border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-primary resize-none h-24"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-3 mt-6">
-              <Button variant="outline" onClick={() => setEditingWs(null)}>
-                Cancel
-              </Button>
-              <Button onClick={handleSaveEdit}>
-                Save Changes
-              </Button>
-            </div>
-          </Card>
-        </div>
-      )}
 
       {/* Smarter Workspace Creation Modal */}
       <AnimatePresence>
