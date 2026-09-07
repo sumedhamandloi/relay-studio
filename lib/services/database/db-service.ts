@@ -68,35 +68,32 @@ export const dbService = {
   // WORKSPACES
   async getWorkspaces(): Promise<Workspace[]> {
     if (isSupabaseConfigured()) {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        return [];
+      }
+
       const { data, error } = await supabase
         .from("workspaces")
         .select("*")
+        .eq("user_id", user.id)
         .order("is_pinned", { ascending: false })
         .order("updated_at", { ascending: false });
+
       if (!error && data) return data as Workspace[];
     }
 
-    // Fallback to local storage
-    if (isClient) {
-      const stored = localStorage.getItem(KEYS.WORKSPACES);
-      if (stored) {
-        const workspaces = JSON.parse(stored) as Workspace[];
-        // Count topics for each
-        const topics = JSON.parse(localStorage.getItem(KEYS.TOPICS) || "[]") as ResearchTopic[];
-        return workspaces.map(ws => ({
-          ...ws,
-          topics_count: topics.filter(t => t.workspace_id === ws.id).length
-        }));
-      }
-    }
-    return DUMMY_WORKSPACES;
+    return [];
   },
 
   // MERGED: keeps localStorage fallback from mine, adds origin_analysis_id support from Krish's version
   async createWorkspace(title: string, description: string, origin_analysis_id?: string): Promise<Workspace> {
+    const { data: { user } } = await supabase.auth.getUser();
+    const userId = user?.id || "user-1";
+
     const newWs: Workspace = {
       id: "ws-" + Math.random().toString(36).substr(2, 9),
-      user_id: "user-1",
+      user_id: userId,
       title,
       description,
       is_pinned: false,
@@ -107,9 +104,13 @@ export const dbService = {
     };
 
     if (isSupabaseConfigured()) {
+      const insertPayload: Record<string, any> = { title, description, origin_analysis_id };
+      if (user?.id) {
+        insertPayload.user_id = user.id;
+      }
       const { data, error } = await supabase
         .from("workspaces")
-        .insert({ title, description, origin_analysis_id })
+        .insert(insertPayload)
         .select()
         .single();
       if (!error && data) return data as Workspace;
@@ -595,6 +596,7 @@ export const dbService = {
         .from("research_notes")
         .select("*")
         .eq("topic_id", topicId)
+        .neq("title", "__AI_RESEARCH_DATA__")
         .order("updated_at", { ascending: false });
       if (!error && data) return data as ResearchNote[];
     }
@@ -603,17 +605,82 @@ export const dbService = {
       const stored = localStorage.getItem(KEYS.NOTES);
       if (stored) {
         const notes = JSON.parse(stored) as ResearchNote[];
-        const filtered = notes.filter(n => n.topic_id === topicId);
+        const filtered = notes.filter(n => n.topic_id === topicId && n.title !== "__AI_RESEARCH_DATA__");
         if (filtered.length > 0) return filtered;
       }
     }
 
-    const fallback = DUMMY_NOTES.filter(n => n.topic_id === topicId);
+    const fallback = DUMMY_NOTES.filter(n => n.topic_id === topicId && n.title !== "__AI_RESEARCH_DATA__");
     if (fallback.length === 0 && isClient) {
       // Auto-create a note placeholder for editing if empty
       return [await this.createNote(topicId, "Synthesized Insights", "Start drafting your synthesis here. Highlight key takeaways from references.")];
     }
     return fallback;
+  },
+
+  // RESEARCH DATA PERSISTENCE (Saves generated research so switching tabs never regenerates)
+  async getResearchData(topicId: string): Promise<any | null> {
+    if (isClient) {
+      try {
+        const cached = localStorage.getItem(`relay_research_${topicId}`);
+        if (cached) return JSON.parse(cached);
+      } catch (e) {
+        console.warn("Failed to read cached research from localStorage:", e);
+      }
+    }
+
+    if (isSupabaseConfigured()) {
+      try {
+        const { data, error } = await supabase
+          .from("research_notes")
+          .select("content")
+          .eq("topic_id", topicId)
+          .eq("title", "__AI_RESEARCH_DATA__")
+          .maybeSingle();
+
+        if (!error && data?.content) {
+          const parsed = JSON.parse(data.content);
+          if (isClient) {
+            localStorage.setItem(`relay_research_${topicId}`, JSON.stringify(parsed));
+          }
+          return parsed;
+        }
+      } catch (e) {
+        console.warn("Failed to read research data from Supabase:", e);
+      }
+    }
+
+    return null;
+  },
+
+  async saveResearchData(topicId: string, researchData: any): Promise<void> {
+    if (!researchData) return;
+
+    if (isClient) {
+      try {
+        localStorage.setItem(`relay_research_${topicId}`, JSON.stringify(researchData));
+      } catch (e) {
+        console.warn("Failed to write research data to localStorage:", e);
+      }
+    }
+
+    if (isSupabaseConfigured()) {
+      try {
+        await supabase
+          .from("research_notes")
+          .delete()
+          .eq("topic_id", topicId)
+          .eq("title", "__AI_RESEARCH_DATA__");
+
+        await supabase.from("research_notes").insert({
+          topic_id: topicId,
+          title: "__AI_RESEARCH_DATA__",
+          content: JSON.stringify(researchData)
+        });
+      } catch (e) {
+        console.warn("Failed to persist research data to Supabase:", e);
+      }
+    }
   },
 
   async createNote(topicId: string, title: string, content: string): Promise<ResearchNote> {

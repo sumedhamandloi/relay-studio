@@ -21,7 +21,11 @@ import {
   FileText,
   Calendar,
   Globe,
-  Tag
+  Tag,
+  Instagram,
+  Zap,
+  TrendingUp,
+  Layers
 } from "lucide-react";
 import { Workspace, UrlAnalysis } from "@/types";
 import { dbService } from "@/lib/services/database/db-service";
@@ -77,17 +81,32 @@ function AnalyzeContent() {
         currentType = "github";
       }
 
-      // Simulate step-by-step loading
-      for (let i = 0; i < loadingStepsText.length; i++) {
-        if (!isMounted) return;
-        setLoadingStep(i);
-        await new Promise(r => setTimeout(r, 700));
+      // Analyze with Gemini AI via API endpoint
+      try {
+        setLoadingStep(1);
+        const res = await fetch("/api/ai/analyze-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: rawUrl }),
+        });
+        const result = await res.json();
+        if (res.ok && result.data) {
+          if (isMounted) {
+            setAnalysis(result.data);
+            setLoadingStep(loadingStepsText.length);
+          }
+          return;
+        } else {
+          console.warn("AI analysis error:", result.error);
+        }
+      } catch (err) {
+        console.warn("AI endpoint unreachable, falling back:", err);
       }
 
-      // Create new analysis
+      // Fallback if AI key not configured or request fails
       if (isMounted) {
-        const newAnalysis = await dbService.createAnalysis(rawUrl, currentType);
-        setAnalysis(newAnalysis);
+        const fallback = await dbService.createAnalysis(rawUrl, currentType);
+        setAnalysis(fallback);
         setLoadingStep(loadingStepsText.length);
       }
     }
@@ -232,16 +251,21 @@ function AnalyzeContent() {
                 <div className="flex items-start gap-4">
                   <div className="w-14 h-14 rounded-xl bg-primary/5 border border-primary/20 flex items-center justify-center shrink-0 shadow-sm mt-1">
                     {analysis.type === "youtube" ? <Youtube className="w-7 h-7 text-red-500" /> : 
+                     analysis.type === "instagram" ? <Instagram className="w-7 h-7 text-pink-500" /> :
                      analysis.type === "reddit" ? <MessageSquare className="w-7 h-7 text-orange-500" /> :
                      <BookOpen className="w-7 h-7 text-primary" />}
                   </div>
                   <div>
                     <div className="flex flex-wrap items-center gap-2 mb-2">
-                      <span className="text-[10px] font-bold uppercase tracking-widest bg-primary/10 text-primary px-2 py-0.5 rounded-full">
-                         {analysis.type === "youtube" ? "YouTube Video" : analysis.type === "reddit" ? "Reddit Discussion" : "Web Article"}
+                      <span className="text-[10px] font-bold uppercase tracking-widest bg-primary/10 text-primary px-2.5 py-0.5 rounded-full">
+                         {analysis.type === "youtube" ? "YouTube Video" : 
+                          analysis.type === "instagram" ? (analysis.format ? `Instagram ${analysis.format}` : "Instagram Post") :
+                          analysis.type === "reddit" ? "Reddit Discussion" : 
+                          analysis.type === "twitter" ? "X / Twitter" :
+                          analysis.type === "linkedin" ? "LinkedIn" : "Web Article"}
                       </span>
                       <span className="text-[10px] font-bold uppercase tracking-widest bg-muted px-2 py-0.5 rounded-full text-muted-foreground">
-                        Analyzed Source
+                        Analyzed with Gemini Flash
                       </span>
                     </div>
                     <h1 className="text-xl font-bold tracking-tight mb-2">
@@ -271,33 +295,122 @@ function AnalyzeContent() {
                 </div>
               </div>
 
-              {/* Analysis Content */}
-              <div className="pt-6 grid grid-cols-1 md:grid-cols-3 gap-8">
-                <div className="md:col-span-1">
-                  <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-primary" /> Short Summary
-                  </h3>
-                  <p className="text-sm text-foreground/90 leading-relaxed bg-primary/5 p-4 rounded-xl border border-primary/10">
-                    {analysis.short_summary || "No summary available for this content."}
+              {/* Hook Card (YouTube & Instagram) */}
+              {analysis.hook && (
+                <div className="mt-6 p-4 rounded-xl border border-amber-500/20 bg-amber-500/5">
+                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-500 mb-1.5">
+                    <Zap className="w-4 h-4" /> Opening Hook Breakdown
+                  </div>
+                  <p className="text-sm text-foreground/90 leading-relaxed font-medium">
+                    {analysis.hook}
                   </p>
                 </div>
+              )}
 
-                <div className="md:col-span-2">
-                  <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
-                    <List className="w-4 h-4 text-primary" /> Key Takeaways
-                  </h3>
-                  {analysis.key_takeaways && analysis.key_takeaways.length > 0 ? (
-                    <ul className="space-y-3">
-                      {analysis.key_takeaways.map((takeaway, idx) => (
-                        <li key={idx} className="flex items-start gap-3 p-3 rounded-lg border border-border/50 bg-card hover:bg-muted/30 transition-colors">
-                          <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
-                          <span className="text-sm text-foreground/90">{takeaway}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="text-sm text-muted-foreground italic">No key takeaways extracted.</div>
+              {/* Analysis Content Grid */}
+              <div className="pt-6 grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div className="md:col-span-1 space-y-6">
+                  <div>
+                    <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-primary" /> {analysis.type === "instagram" ? "Caption & Narrative" : "Summary"}
+                    </h3>
+                    <p className="text-sm text-foreground/90 leading-relaxed bg-primary/5 p-4 rounded-xl border border-primary/10">
+                      {analysis.caption_analysis || analysis.short_summary || "No summary available for this content."}
+                    </p>
+                  </div>
+
+                  {/* Instagram Content Structure */}
+                  {analysis.content_structure && analysis.content_structure.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-pink-500" /> Content Structure
+                      </h3>
+                      <div className="space-y-2">
+                        {analysis.content_structure.map((step, idx) => (
+                          <div key={idx} className="text-xs p-2.5 rounded-lg border border-border/60 bg-muted/20 flex items-start gap-2">
+                            <span className="w-4 h-4 rounded-full bg-pink-500/10 text-pink-500 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
+                              {idx + 1}
+                            </span>
+                            <span className="text-foreground/90">{step}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
+
+                  {/* Engagement Signals (Instagram) */}
+                  {analysis.engagement_signals && analysis.engagement_signals.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+                        <TrendingUp className="w-4 h-4 text-emerald-500" /> Engagement Signals
+                      </h3>
+                      <ul className="space-y-2">
+                        {analysis.engagement_signals.map((sig, idx) => (
+                          <li key={idx} className="text-xs p-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 text-foreground/90 flex items-start gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 mt-1.5" />
+                            <span>{sig}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Engagement Observations (YouTube) */}
+                  {analysis.engagement_observations && analysis.engagement_observations.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+                        <TrendingUp className="w-4 h-4 text-emerald-500" /> Engagement Observations
+                      </h3>
+                      <ul className="space-y-2">
+                        {analysis.engagement_observations.map((obs, idx) => (
+                          <li key={idx} className="text-xs p-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 text-foreground/90 flex items-start gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 mt-1.5" />
+                            <span>{obs}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                <div className="md:col-span-2 space-y-6">
+                  {/* YouTube Timeline */}
+                  {analysis.timeline && analysis.timeline.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-red-500" /> Video Timeline & Chapters
+                      </h3>
+                      <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                        {analysis.timeline.map((item, idx) => (
+                          <div key={idx} className="flex items-start gap-3 p-2.5 rounded-lg border border-border/50 bg-card hover:bg-muted/20 transition-colors text-xs">
+                            <span className="font-mono font-bold text-red-500 bg-red-500/10 px-2 py-0.5 rounded text-[11px] shrink-0">
+                              {item.timestamp}
+                            </span>
+                            <span className="text-foreground/90 font-medium">{item.description}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Key Takeaways / Points */}
+                  <div>
+                    <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+                      <List className="w-4 h-4 text-primary" /> Key Takeaways & Core Points
+                    </h3>
+                    {analysis.key_takeaways && analysis.key_takeaways.length > 0 ? (
+                      <ul className="space-y-2.5">
+                        {analysis.key_takeaways.map((takeaway, idx) => (
+                          <li key={idx} className="flex items-start gap-3 p-3 rounded-lg border border-border/50 bg-card hover:bg-muted/30 transition-colors">
+                            <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
+                            <span className="text-sm text-foreground/90">{takeaway}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="text-sm text-muted-foreground italic">No key takeaways extracted.</div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

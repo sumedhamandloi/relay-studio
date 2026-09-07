@@ -45,6 +45,9 @@ export interface Statistic {
 
 export interface ResearchData {
   overview: string;
+  key_findings?: string[];
+  contradictions?: string[];
+  takeaways?: string[];
   sources: Source[];
   community_opinions: CommunityOpinion[];
   popular_videos: Video[];

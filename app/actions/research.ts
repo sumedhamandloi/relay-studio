@@ -4,9 +4,11 @@ import { ResearchGenerator } from "@/lib/services/ai/research-generator";
 
 export async function generateResearchAction(topicId: string, providedApiKey?: string) {
   try {
-    const apiKey = providedApiKey || process.env.OPENAI_API_KEY;
+    const apiKey = providedApiKey || process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error("OpenAI API Key is required to generate research. Please set it in .env.local or provide it in the UI.");
+      throw new Error(
+        "GEMINI_API_KEY is not set. Get your free student API key at https://aistudio.google.com/apikey and add it to your .env.local"
+      );
     }
     const researchData = await ResearchGenerator.generateResearch(topicId, apiKey);
     return { success: true, data: researchData };

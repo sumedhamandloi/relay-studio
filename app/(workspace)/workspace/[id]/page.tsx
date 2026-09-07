@@ -106,50 +106,65 @@ export default function WorkspacePage({ params }: PageProps) {
   }, [selectedTopic]);
 
   async function loadWorkspaceData() {
-    const res = await fetch("/api/workspaces");
-    if (!res.ok) {
+    try {
+      let currentWs: Workspace | null = null;
+
+      // 1. Try direct fetch by workspace ID
+      const singleRes = await fetch(`/api/workspaces/${id}`);
+      if (singleRes.ok) {
+        currentWs = await singleRes.json();
+      }
+
+      // 2. Try fetching full list
+      if (!currentWs) {
+        const res = await fetch("/api/workspaces");
+        if (res.ok) {
+          const wsList: Workspace[] = await res.json();
+          currentWs = wsList.find(w => w.id === id) || null;
+        }
+      }
+
+      // 3. Check client dbService / localStorage before bouncing
+      if (!currentWs) {
+        const localList = await dbService.getWorkspaces();
+        currentWs = localList.find(w => w.id === id) || null;
+      }
+
+      if (!currentWs) {
+        console.warn(`Workspace "${id}" not found, redirecting to dashboard`);
+        router.push("/dashboard");
+        return;
+      }
+
+      setWorkspace(currentWs);
+
+      if (currentWs.origin_analysis_id) {
+        const analyses = await dbService.getAnalyses();
+        const origin = analyses.find(a => a.id === currentWs!.origin_analysis_id);
+        if (origin) {
+          setOriginAnalysis(origin);
+        }
+      }
+
+      const wsRefs = await dbService.getWorkspaceReferences(id);
+      setWorkspaceReferences(wsRefs);
+
+      const tRes = await fetch(`/api/topics?workspaceId=${id}`);
+      if (tRes.ok) {
+        const wsTopics: ResearchTopic[] = await tRes.json();
+        setTopics(wsTopics);
+
+        // Set active topic
+        if (wsTopics.length > 0) {
+          const match = wsTopics.find(t => t.id === initialTopicId);
+          setSelectedTopic(match || wsTopics[0]);
+        } else {
+          setSelectedTopic(null);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load workspace data:", err);
       router.push("/dashboard");
-      return;
-    }
-    const wsList: Workspace[] = await res.json();
-    const currentWs = wsList.find(w => w.id === id);
-    if (!currentWs) {
-      router.push("/dashboard");
-      return;
-    }
-    setWorkspace(currentWs);
-
-    if (currentWs.origin_analysis_id) {
-      const analyses = await dbService.getAnalyses();
-      const origin = analyses.find(a => a.id === currentWs.origin_analysis_id);
-      if (origin) {
-        setOriginAnalysis(origin);
-      }
-    }
-
-    if (currentWs.origin_analysis_id) {
-      const analyses = await dbService.getAnalyses();
-      const origin = analyses.find(a => a.id === currentWs.origin_analysis_id);
-      if (origin) {
-        setOriginAnalysis(origin);
-      }
-    }
-
-    const wsRefs = await dbService.getWorkspaceReferences(id);
-    setWorkspaceReferences(wsRefs);
-
-    const tRes = await fetch(`/api/topics?workspaceId=${id}`);
-    if (tRes.ok) {
-      const wsTopics: ResearchTopic[] = await tRes.json();
-      setTopics(wsTopics);
-
-      // Set active topic
-      if (wsTopics.length > 0) {
-        const match = wsTopics.find(t => t.id === initialTopicId);
-        setSelectedTopic(match || wsTopics[0]);
-      } else {
-        setSelectedTopic(null);
-      }
     }
   }
 
@@ -160,6 +175,13 @@ export default function WorkspacePage({ params }: PageProps) {
       setReferences(refs);
     } else {
       setReferences([]);
+    }
+
+    // Load persisted research data if available so research tab is immediately populated
+    const research = await dbService.getResearchData(topicId);
+    if (research) {
+      setSelectedTopic(prev => prev && prev.id === topicId ? { ...prev, research_data: research } : prev);
+      setTopics(prev => prev.map(t => t.id === topicId ? { ...t, research_data: research } : t));
     }
 
     const nts = await dbService.getNotes(topicId);
@@ -533,7 +555,10 @@ export default function WorkspacePage({ params }: PageProps) {
                   {selectedAnalysis.overview && selectedAnalysis.overview.length > 0 && (
                     <SectionWrapper id="analysis-overview" title="Overview" icon={BookOpen}>
                       <div className="space-y-4 text-foreground/90 leading-relaxed text-sm">
-                        {selectedAnalysis.overview.map((para: string, i: number) => (
+                        {(Array.isArray(selectedAnalysis.overview)
+                          ? selectedAnalysis.overview
+                          : [selectedAnalysis.overview]
+                        ).map((para: string, i: number) => (
                           <p key={i}>{para}</p>
                         ))}
                       </div>
@@ -806,7 +831,9 @@ export default function WorkspacePage({ params }: PageProps) {
               </div>
 
               {/* Research Section Navigation Strip — sits between tabs and scroll area */}
-              {activeTab === "research" && <ResearchNav />}
+              <div className={activeTab === "research" ? "block" : "hidden"}>
+                <ResearchNav />
+              </div>
 
               {/* Scrollable Tab Views */}
               <div className={cn(
@@ -814,10 +841,20 @@ export default function WorkspacePage({ params }: PageProps) {
                 activeTab === "research" ? "p-4 md:p-6" : "p-4 md:p-6"
               )}>
 
-                {/* 0. Research tab (New) */}
-                {activeTab === "research" && selectedTopic && (
-                  <ResearchView topicId={selectedTopic.id} initialData={selectedTopic.research_data} />
-                )}
+                {/* 0. Research tab (Kept mounted via hidden/block so switching tabs NEVER unmounts or loses data) */}
+                <div className={cn("w-full", activeTab === "research" ? "block" : "hidden")}>
+                  {selectedTopic && (
+                    <ResearchView 
+                      topicId={selectedTopic.id} 
+                      initialData={selectedTopic.research_data} 
+                      hasReferences={references.length > 0} 
+                      onDataChange={(newData) => {
+                        setSelectedTopic(prev => prev ? { ...prev, research_data: newData } : prev);
+                        setTopics(prev => prev.map(t => t.id === selectedTopic.id ? { ...t, research_data: newData } : t));
+                      }}
+                    />
+                  )}
+                </div>
 
                 {/* 1. References tab */}
                 {activeTab === "references" && (

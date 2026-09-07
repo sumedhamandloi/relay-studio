@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Sparkles, FileSearch, CheckCircle2, Loader2 } from "lucide-react";
+import { Sparkles, FileSearch, CheckCircle2, Loader2, AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { mockResearchData } from "./mockData";
@@ -9,6 +9,8 @@ import { ResearchData } from "./types";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   OverviewSection, 
+  KeyFindingsSection,
+  ContradictionsSection,
   SourcesSection, 
   CommunityOpinionsSection, 
   PopularVideosSection, 
@@ -19,6 +21,8 @@ import {
 
 const NAV_ITEMS = [
   { id: "overview", label: "Overview" },
+  { id: "key_findings", label: "Key Findings" },
+  { id: "contradictions", label: "Contradictions" },
   { id: "sources", label: "Sources" },
   { id: "community", label: "Community" },
   { id: "videos", label: "Videos" },
@@ -29,6 +33,8 @@ const NAV_ITEMS = [
 
 const GENERATION_SEQUENCE = [
   { id: "overview", loadingMsg: "Synthesizing Overview..." },
+  { id: "key_findings", loadingMsg: "Extracting Key Findings..." },
+  { id: "contradictions", loadingMsg: "Mapping Contradictions..." },
   { id: "sources", loadingMsg: "Collecting Sources..." },
   { id: "community", loadingMsg: "Analyzing Community..." },
   { id: "videos", loadingMsg: "Finding Videos..." },
@@ -41,6 +47,7 @@ const GENERATION_SEQUENCE = [
 declare global {
   interface Window {
     __researchActiveSection__: string;
+    __researchHasData__: boolean;
   }
 }
 
@@ -51,7 +58,12 @@ declare global {
  */
 export function ResearchNav() {
   const [activeSection, setActiveSection] = useState("overview");
-  const [hasData, setHasData] = useState(false);
+  const [hasData, setHasData] = useState(() => {
+    if (typeof window !== "undefined") {
+      return !!window.__researchHasData__;
+    }
+    return false;
+  });
 
   // Keep local active section in sync via a separate listener approach
   useEffect(() => {
@@ -61,7 +73,12 @@ export function ResearchNav() {
   }, []);
 
   useEffect(() => {
-    const onData = () => setHasData(true);
+    const onData = () => {
+      if (typeof window !== "undefined") {
+        window.__researchHasData__ = true;
+      }
+      setHasData(true);
+    };
     window.addEventListener("research:dataReady", onData);
     return () => window.removeEventListener("research:dataReady", onData);
   }, []);
@@ -111,13 +128,45 @@ export function ResearchNav() {
  * Renders inside the padded scroll container in page.tsx.
  * Does NOT include the navigation strip.
  */
-export function ResearchView({ topicId, initialData }: { topicId: string, initialData?: ResearchData | null }) {
-  const [data, setData] = useState<ResearchData | null>(initialData || null);
+export function ResearchView({ 
+  topicId, 
+  initialData,
+  hasReferences = false,
+  onDataChange
+}: { 
+  topicId: string; 
+  initialData?: ResearchData | null;
+  hasReferences?: boolean;
+  onDataChange?: (data: ResearchData) => void;
+}) {
+  const [data, setData] = useState<ResearchData | null>(() => {
+    if (initialData) {
+      if (typeof window !== "undefined") window.__researchHasData__ = true;
+      return initialData;
+    }
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem(`relay_research_${topicId}`);
+        if (cached) {
+          window.__researchHasData__ = true;
+          return JSON.parse(cached);
+        }
+      } catch {}
+    }
+    return null;
+  });
+
   const [isGenerating, setIsGenerating] = useState(false);
   const [activeSection, setActiveSection] = useState("overview");
-  const [generatedSections, setGeneratedSections] = useState<string[]>([]);
+  const [generatedSections, setGeneratedSections] = useState<string[]>(() => {
+    if (initialData || (typeof window !== "undefined" && localStorage.getItem(`relay_research_${topicId}`))) {
+      return GENERATION_SEQUENCE.map(s => s.id);
+    }
+    return [];
+  });
   const [generatingStatus, setGeneratingStatus] = useState<string | null>(null);
   const [completedMessages, setCompletedMessages] = useState<string[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Broadcast active section changes to ResearchNav via custom event
   const updateActiveSection = (id: string) => {
@@ -129,14 +178,54 @@ export function ResearchView({ topicId, initialData }: { topicId: string, initia
   // Broadcast when data arrives so ResearchNav can show itself
   useEffect(() => {
     if (data) {
+      if (typeof window !== "undefined") {
+        window.__researchHasData__ = true;
+      }
       window.dispatchEvent(new Event("research:dataReady"));
     }
   }, [data]);
 
-  // Sync initialData prop when selecting a different topic
+  // Sync initialData or fetch cached data when topic changes
   useEffect(() => {
-    setData(initialData || null);
-  }, [initialData]);
+    if (initialData) {
+      setData(initialData);
+      setGeneratedSections(GENERATION_SEQUENCE.map(s => s.id));
+      if (typeof window !== "undefined") window.__researchHasData__ = true;
+      return;
+    }
+
+    // Check localStorage cache
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem(`relay_research_${topicId}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          setData(parsed);
+          setGeneratedSections(GENERATION_SEQUENCE.map(s => s.id));
+          window.__researchHasData__ = true;
+          onDataChange?.(parsed);
+          return;
+        }
+      } catch {}
+    }
+
+    // Fallback: check database async
+    let isCancelled = false;
+    import("@/lib/services/database/db-service").then(({ dbService }) => {
+      dbService.getResearchData(topicId).then(res => {
+        if (!isCancelled && res) {
+          setData(res);
+          setGeneratedSections(GENERATION_SEQUENCE.map(s => s.id));
+          if (typeof window !== "undefined") window.__researchHasData__ = true;
+          onDataChange?.(res);
+        }
+      });
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [topicId, initialData]);
 
   // Listen for scroll requests from ResearchNav
   useEffect(() => {
@@ -182,15 +271,17 @@ export function ResearchView({ topicId, initialData }: { topicId: string, initia
 
   const handleGenerate = async () => {
     setIsGenerating(true);
+    setErrorMessage(null);
     setGeneratedSections([]);
     setCompletedMessages([]);
     
-    setGeneratingStatus("Extracting URLs and synthesizing research... This may take up to a minute.");
+    setGeneratingStatus(
+      hasReferences
+        ? "Extracting source references and synthesizing research... This may take up to a minute."
+        : "Gathering comprehensive topic research with Gemini Flash... This may take up to a minute."
+    );
 
     try {
-      // Lazy-import to avoid breaking client boundaries if possible, or just standard import.
-      // Wait, we need to call the server action. 
-      // It's a server action, so we can just import and call it. But I'll dynamically import it to avoid top-level issues.
       const { generateResearchAction } = await import("@/app/actions/research");
       const res = await generateResearchAction(topicId);
       
@@ -199,6 +290,13 @@ export function ResearchView({ topicId, initialData }: { topicId: string, initia
       }
 
       setData(res.data);
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem(`relay_research_${topicId}`, JSON.stringify(res.data));
+          window.__researchHasData__ = true;
+        } catch {}
+      }
+      onDataChange?.(res.data);
       
       // Animate sections appearing
       let currentIdx = 0;
@@ -222,8 +320,8 @@ export function ResearchView({ topicId, initialData }: { topicId: string, initia
       nextStep();
       
     } catch (error: any) {
-      console.error(error);
-      alert(error.message || "Failed to generate research. Did you provide an OpenAI key in .env.local?");
+      console.error("Research generation error:", error);
+      setErrorMessage(error.message || "Temporary AI model busy state. Please click retry.");
       setIsGenerating(false);
       setGeneratingStatus(null);
     }
@@ -236,15 +334,26 @@ export function ResearchView({ topicId, initialData }: { topicId: string, initia
           <FileSearch className="w-8 h-8 text-primary/80" />
         </div>
         <h2 className="text-2xl font-black text-foreground mb-3 tracking-tight">AI-Powered Research Workspace</h2>
-        <p className="text-sm text-muted-foreground max-w-md leading-relaxed mb-8">
+        <p className="text-sm text-muted-foreground max-w-md leading-relaxed mb-6">
           Relay Studio generates structured, modular research insights rather than walls of text. Click below to start the research engine for this topic.
         </p>
+
+        {errorMessage && (
+          <div className="mb-6 p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-sm max-w-md flex flex-col items-center gap-2">
+            <div className="flex items-center gap-2 font-semibold">
+              <AlertTriangle className="w-4 h-4 text-orange-500" />
+              <span className="text-foreground text-xs font-bold uppercase tracking-wider">AI Service Notice</span>
+            </div>
+            <p className="text-xs text-muted-foreground text-center leading-relaxed">{errorMessage}</p>
+          </div>
+        )}
+
         <Button
           onClick={handleGenerate}
           className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-8 py-6 rounded-xl text-sm flex items-center gap-2 transition-all shadow-[0_0_20px_rgba(var(--primary),0.3)] hover:shadow-[0_0_30px_rgba(var(--primary),0.5)]"
         >
-          <Sparkles className="w-4 h-4" />
-          Generate Research
+          {errorMessage ? <RefreshCw className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
+          {errorMessage ? "Retry Research Generation" : "Generate Research"}
         </Button>
       </div>
     );
@@ -270,6 +379,8 @@ export function ResearchView({ topicId, initialData }: { topicId: string, initia
         {data && (
           <>
             {renderSection("overview", OverviewSection, data.overview)}
+            {data.key_findings && data.key_findings.length > 0 && renderSection("key_findings", KeyFindingsSection, data.key_findings)}
+            {data.contradictions && data.contradictions.length > 0 && renderSection("contradictions", ContradictionsSection, data.contradictions)}
             {renderSection("sources", SourcesSection, data.sources)}
             {renderSection("community", CommunityOpinionsSection, data.community_opinions)}
             {renderSection("videos", PopularVideosSection, data.popular_videos)}
