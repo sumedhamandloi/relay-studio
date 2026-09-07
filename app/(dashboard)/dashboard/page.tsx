@@ -219,6 +219,11 @@ export default function DashboardPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ title, description: "Automatically generated research workspace." })
           });
+          
+          if (!wsRes.ok) {
+            const errData = await wsRes.json().catch(() => ({}));
+            throw new Error(errData.error || "Failed to create workspace in database.");
+          }
           const targetWs = await wsRes.json();
 
           const topRes = await fetch("/api/topics", {
@@ -226,15 +231,20 @@ export default function DashboardPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ workspace_id: targetWs.id, title, description: "Primary research thread." })
           });
-          const targetTopic = await topRes.json();
+
+          let targetTopicId = "";
+          if (topRes.ok) {
+            const targetTopic = await topRes.json();
+            targetTopicId = targetTopic.id;
+          }
 
           setSubmitStatus("Workspace created! Redirecting...");
           setSearchInput("");
           setTimeout(() => {
             setSubmitStatus(null);
             loadData();
-            router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
-          }, 800);
+            router.push(`/workspace/${targetWs.id}${targetTopicId ? `?topic=${targetTopicId}&tab=research` : ""}`);
+          }, 600);
         } else {
           setResearchQuery(title);
           setIsResearchModalOpen(true);

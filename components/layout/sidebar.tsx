@@ -42,6 +42,7 @@ import {
   DropdownMenuSeparator
 } from "@/components/ui/dropdown-menu";
 import { dbService } from "@/lib/services/database/db-service";
+import { supabase } from "@/lib/supabase/client";
 import { Workspace } from "@/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -179,11 +180,16 @@ export function Sidebar() {
     loadWorkspaces();
   }
 
-  function handleLogout() {
+  async function handleLogout() {
     // Clear cookies & mock auth
     if (typeof window !== "undefined") {
       document.cookie = "relay-studio-mock-auth=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;";
-      router.push("/auth");
+      try {
+        await supabase.auth.signOut();
+      } catch (err) {
+        console.error("Signout error:", err);
+      }
+      window.location.href = "/auth";
     }
   }
 

@@ -95,14 +95,14 @@ export interface Integration {
 export interface UrlAnalysis {
   id: string;
   url: string;
-  type: "youtube" | "reddit" | "github" | "generic";
+  type: "youtube" | "instagram" | "twitter" | "linkedin" | "reddit" | "github" | "generic";
   title?: string;
   creator?: string;
   publish_date?: string;
   duration?: string;
   language?: string;
   primary_topic?: string;
-  overview?: string[];
+  overview?: string[] | string;
   main_ideas?: { heading: string, explanation: string }[];
   detailed_breakdown?: { section: string, content: string }[];
   reading_time_saved?: string;
@@ -114,6 +114,23 @@ export interface UrlAnalysis {
   people_mentioned?: string[];
   technologies_mentioned?: string[];
   resources_mentioned?: string[];
+  // Platform-specific insights
+  hook?: string;
+  summary?: string;
+  key_points?: string[];
+  engagement_observations?: string[];
+  format?: string;
+  caption_analysis?: string;
+  engagement_signals?: string[];
+  content_structure?: string[];
   status?: "analyzed" | "processing" | "failed";
   created_at: string;
+}
+
+export interface ResearchSynthesisResult {
+  overview: string;
+  key_findings: string[];
+  contradictions: string[];
+  important_sources: Array<{ title?: string; url?: string; takeaway?: string } | string>;
+  takeaways: string[];
 }
