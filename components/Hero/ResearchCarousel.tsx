@@ -1,453 +1,385 @@
 "use client";
 
-import React, { useRef, useState, useEffect, useCallback, memo } from "react";
-import { useMotionValue, useAnimationFrame, animate, useReducedMotion } from "framer-motion";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { 
+  ChevronLeft, 
+  ChevronRight, 
+  Play, 
+  Pause, 
+  LayoutDashboard,
+  Layers,
+  BrainCircuit,
+  MessageSquare,
+  Link2,
+  LineChart,
+  FileText,
+  FolderClosed
+} from "lucide-react";
 import { CarouselWindow } from "./CarouselWindow";
 
-// ─── Carousel items ────────────────────────────────────────────────────────────
+// ─── Showcase items ────────────────────────────────────────────────────────────
 const SHOWCASE_ITEMS = [
-  { id: "dashboard", title: "Dashboard Overview" },
-  { id: "workspace", title: "Research Workspace" },
-  { id: "ai_results", title: "AI Research Results" },
-  { id: "research_thread", title: "Research Thread" },
-  { id: "analyze_url", title: "Analyze URL Mode" },
-  { id: "insights", title: "Insights View" },
-  { id: "create_view", title: "Create Workspace" },
-  { id: "workspace_overview", title: "Workspaces Hub" },
+  { 
+    id: "dashboard", 
+    label: "Dashboard", 
+    title: "Dashboard Overview", 
+    subtitle: "Unified knowledge workspace & quick actions",
+    icon: LayoutDashboard 
+  },
+  { 
+    id: "workspace", 
+    label: "Canvas", 
+    title: "Research Workspace", 
+    subtitle: "Multi-panel notes, topics & references",
+    icon: Layers 
+  },
+  { 
+    id: "ai_results", 
+    label: "AI Engine", 
+    title: "AI Research Engine", 
+    subtitle: "Grounded synthesis with verified citations",
+    icon: BrainCircuit 
+  },
+  { 
+    id: "research_thread", 
+    label: "Thread", 
+    title: "Research Thread", 
+    subtitle: "Context-aware conversational assistant",
+    icon: MessageSquare 
+  },
+  { 
+    id: "analyze_url", 
+    label: "Collector", 
+    title: "Quick URL Collector", 
+    subtitle: "Instant YouTube transcript & article extractor",
+    icon: Link2 
+  },
+  { 
+    id: "insights", 
+    label: "Insights", 
+    title: "Insights & Takeaways", 
+    subtitle: "Semantic summaries & key takeaways",
+    icon: LineChart 
+  },
+  { 
+    id: "create_view", 
+    label: "Editor", 
+    title: "Script Outline Editor", 
+    subtitle: "Side-by-side video outline & narration drafting",
+    icon: FileText 
+  },
+  { 
+    id: "workspace_overview", 
+    label: "Hub", 
+    title: "Workspaces Hub", 
+    subtitle: "Central library of active creator projects",
+    icon: FolderClosed 
+  },
 ];
 
-const COUNT = SHOWCASE_ITEMS.length;
-const STEP = 360 / COUNT; // 45° per card
+const AUTOPLAY_DELAY = 4200; // 4.2 seconds per slide
 
-// ─── Orbital math ──────────────────────────────────────────────────────────────
-// angleRad — card's angular position around the ring.
-//   0  = straight in front of camera (center)
-//   π  = directly behind (back)
-//
-// All properties are derived continuously from cos/sin — no discrete
-// "center / left / right" state. The cos² focus curve gives the center
-// card a wide, prominent plateau that drops off sharply at the sides,
-// which is what creates the Apple Cover Flow feel.
-// ──────────────────────────────────────────────────────────────────────────────
-function computeCard(
-  angleRad: number,
-  radiusX: number,
-  radiusZ: number,
-  time: number,
-  reducedMotion: boolean,
-) {
-  // Normalize the continuous angleRad to [-PI, PI] to allow directional logic
-  let normAngle = ((angleRad % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-  if (normAngle > Math.PI) normAngle -= 2 * Math.PI;
-
-  const sinA = Math.sin(normAngle);
-  const cosA = Math.cos(normAngle);
-
-  // True 3D orbital base position
-  const tx = sinA * radiusX;
-  const baseTz = (cosA - 1) * radiusZ;
-
-  // Normalize depth from 0 (farthest back) to 1 (front center)
-  const normZ = (cosA + 1) / 2;
-
-  // Create an asymmetric, staggered focus handoff (creates a ~150ms gap).
-  // The carousel rotates such that angles DECREASE over time.
-  // Incoming card (normAngle > 0): moves from +45 deg down to 0.
-  // Outgoing card (normAngle < 0): moves from 0 down to -45 deg.
-  let focus = 0;
-  if (normAngle >= 0) {
-    // INCOMING: Delays its growth. Starts gaining focus at 28 deg (0.49 rad).
-    focus = Math.max(0, 1 - (normAngle / 0.49)); 
-  } else {
-    // OUTGOING: Shrinks and moves backward FIRST. Loses focus by 15 deg (0.26 rad).
-    focus = Math.max(0, 1 - (Math.abs(normAngle) / 0.26));
-  }
-  // SmoothStep for cinematic easing
-  focus = focus * focus * (3 - 2 * focus);
-
-  // Apply a staggered Z-depth pop so they exchange depth without overlapping.
-  // The outgoing card moves backward (loses boost) before incoming moves forward.
-  const tz = baseTz + (focus * 140);
-
-  // Explicit scale-based transition from 0.90 (background) to 1.08 (spotlight)
-  const scale = 0.90 + (focus * 0.18);
-
-  // Opacity: solid in the front to prevent ghosting, fades out gracefully in the back
-  const opacity = reducedMotion
-    ? Math.max(0, 0.3 + focus * 0.7)
-    : Math.min(1.0, normZ * 2.0);
-
-  // Blur: Completely removed per user suggestion to mimic Apple's clean transitions.
-  // We rely entirely on scale, brightness, and depth for a crisp, premium feel.
-  const blurPx = 0;
-
-  // Lighting transitions: Outgoing screenshots subtly reduce contrast and brightness 
-  // (down to 85-90% as suggested) to simulate moving away into the background.
-  // We use `focus` instead of `normZ` so they darken exactly as they step back.
-  const brightness = 0.85 + (0.15 * focus); // 0.85 when unfocused, 1.0 when focused
-  const contrast = 0.90 + (0.10 * focus);   // 0.90 when unfocused, 1.0 when focused
-  const saturation = 85 + (15 * focus);     // 85% when unfocused, 100% when focused
-
-  // Cylinder Rotation (Wheel effect):
-  const rotY = reducedMotion ? 0 : -(normAngle * 180 / Math.PI) * 0.45;
-
-  // Z-index: exactly matches true Z depth to guarantee perfect occlusion
-  const zIndex = Math.round(tz);
-
-  // Gentle float for the front card only
-  const floatY = reducedMotion
-    ? 0
-    : Math.sin(time / 1400) * 8 * focus;
-
-  const glowOpacity = focus * 0.55;
-
-  return { tx, tz, scale, opacity, blurPx, brightness, saturation, contrast, rotY, zIndex, floatY, glowOpacity, focus };
+function getCardOffset(index: number, activeIndex: number, total: number) {
+  let diff = (index - activeIndex) % total;
+  if (diff > total / 2) diff -= total;
+  if (diff < -total / 2) diff += total;
+  return diff;
 }
 
-// ─── Card DOM ref bundle — passed up from each CarouselCard to the parent ─────
-interface CardRefs {
-  card: HTMLDivElement | null;
-  glow: HTMLDivElement | null;
-}
-
-// ─── ResearchCarousel ─────────────────────────────────────────────────────────
 export function ResearchCarousel() {
-  const outerRef = useRef<HTMLDivElement>(null);
-  const stageRef = useRef<HTMLDivElement>(null);
-  const [dimensions, setDimensions] = useState({ width: 700, height: 420 });
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(true);
   const [isHovered, setIsHovered] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const shouldReduceMotion = useReducedMotion();
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const angleDeg = useMotionValue(0);
-  const parallaxRef = useRef({ rx: 0, ry: 0 });
-  const parallaxTargetRef = useRef({ rx: 0, ry: 0 });
-  const dragStartX = useRef(0);
-  const dragStartAngle = useRef(0);
-  const snapAnim = useRef<ReturnType<typeof animate> | null>(null);
+  const total = SHOWCASE_ITEMS.length;
 
-  // Refs to every card's DOM nodes — populated by CarouselCard on mount
-  const cardRefsArray = useRef<CardRefs[]>(
-    Array.from({ length: COUNT }, () => ({ card: null, glow: null }))
-  );
+  const goToSlide = useCallback((index: number) => {
+    setCurrentIndex((index + total) % total);
+  }, [total]);
 
-  // Per-card last-rendered values for dead-band throttling
-  const lastBlur = useRef<number[]>(new Array(COUNT).fill(-1));
-  const lastBrightness = useRef<number[]>(new Array(COUNT).fill(-1));
-  const lastSaturation = useRef<number[]>(new Array(COUNT).fill(-1));
-  const lastContrast = useRef<number[]>(new Array(COUNT).fill(-1));
-  const lastActive = useRef<boolean[]>(new Array(COUNT).fill(false));
+  const handleNext = useCallback(() => {
+    setCurrentIndex((prev) => (prev + 1) % total);
+  }, [total]);
 
-  // ── True 3D Geometry ──────────────────────────────────────────────────────
-  // We use a deep radiusZ so cards physically travel far backward in space.
-  // CSS perspective naturally scales them down, creating a real 3D illusion
-  // without relying on artificial flat scaling.
-  const cardWidth = Math.min(500, dimensions.width * 0.65);
-  const cardHeight = Math.round(cardWidth * (10 / 16));
-  const radiusX = dimensions.width * 0.42; // Wide elliptical track
-  const radiusZ = dimensions.width * 0.35; // Deep Z-axis track
+  const handlePrev = useCallback(() => {
+    setCurrentIndex((prev) => (prev - 1 + total) % total);
+  }, [total]);
 
-  // ── ResizeObserver — measures outerRef, the true column width ─────────────
+  // Autoplay management
   useEffect(() => {
-    const el = outerRef.current;
-    if (!el) return;
-    const measure = () => setDimensions({ width: el.offsetWidth, height: el.offsetHeight });
-    const obs = new ResizeObserver(measure);
-    obs.observe(el);
-    measure();
-    return () => obs.disconnect();
-  }, []);
-
-  // ── SINGLE SHARED RAF LOOP ───────────────────────────────────────────────
-  useAnimationFrame((time, delta) => {
-    const refs = cardRefsArray.current;
-    const isRm = !!shouldReduceMotion;
-    const isDrag = isDragging;
-    const isHov = isHovered;
-
-    // ── Auto-rotation ────────────────────────────────────────────────────
-    if (!isDrag && !isHov && !isRm) {
-      angleDeg.set(angleDeg.get() - (10.5 * delta) / 1000);
+    if (!isPlaying || isHovered) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      return;
     }
 
-    // ── Parallax tilt ────────────────────────────────────────────────────
-    if (!isRm) {
-      const stage = stageRef.current;
-      if (stage) {
-        const alpha = 1 - Math.pow(0.92, delta / 16);
-        parallaxRef.current.rx += (parallaxTargetRef.current.rx - parallaxRef.current.rx) * alpha;
-        parallaxRef.current.ry += (parallaxTargetRef.current.ry - parallaxRef.current.ry) * alpha;
-        stage.style.transform = `rotateX(${parallaxRef.current.rx.toFixed(3)}deg) rotateY(${parallaxRef.current.ry.toFixed(3)}deg)`;
-      }
-    }
+    timerRef.current = setInterval(() => {
+      handleNext();
+    }, AUTOPLAY_DELAY);
 
-    const currentAngle = angleDeg.get();
-    let frontIndex = 0;
-    let bestFocus = -1;
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isPlaying, isHovered, handleNext]);
 
-    for (let i = 0; i < COUNT; i++) {
-      const { card, glow } = refs[i];
-      if (!card) continue;
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "ArrowRight") handleNext();
+      if (e.key === "ArrowLeft") handlePrev();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleNext, handlePrev]);
 
-      const angleRad = ((currentAngle + i * STEP) * Math.PI) / 180;
-      const c = computeCard(angleRad, radiusX, radiusZ, time, isRm);
-
-      card.style.transform = `translate3d(${c.tx.toFixed(2)}px, ${c.floatY.toFixed(2)}px, ${c.tz.toFixed(2)}px) scale(${c.scale.toFixed(4)}) rotateY(${c.rotY.toFixed(2)}deg)`;
-      card.style.zIndex = String(c.zIndex);
-      card.style.opacity = c.opacity.toFixed(4);
-
-      // Filter dead-band
-      const blurChanged = Math.abs(c.blurPx - lastBlur.current[i]) > 0.4;
-      const brightChanged = Math.abs(c.brightness - lastBrightness.current[i]) > 0.008;
-      const satChanged = Math.abs(c.saturation - lastSaturation.current[i]) > 1.0;
-      const conChanged = Math.abs(c.contrast - lastContrast.current[i]) > 0.005;
-
-      if (blurChanged || brightChanged || satChanged || conChanged) {
-        lastBlur.current[i] = c.blurPx;
-        lastBrightness.current[i] = c.brightness;
-        lastSaturation.current[i] = c.saturation;
-        lastContrast.current[i] = c.contrast;
-
-        let filter = `brightness(${c.brightness.toFixed(3)}) saturate(${c.saturation.toFixed(1)}%) contrast(${c.contrast.toFixed(3)})`;
-        if (c.blurPx > 0.4) filter = `blur(${c.blurPx.toFixed(1)}px) ` + filter;
-        card.style.filter = filter;
-      }
-
-      if (glow) glow.style.opacity = c.glowOpacity.toFixed(4);
-
-      const nowActive = c.focus > 0.85;
-      if (nowActive !== lastActive.current[i]) {
-        lastActive.current[i] = nowActive;
-        card.style.pointerEvents = nowActive ? "auto" : "none";
-        card.style.cursor = nowActive ? "pointer" : "default";
-      }
-
-      if (c.focus > bestFocus) { bestFocus = c.focus; frontIndex = i; }
-    }
-
-    if (frontIndex !== activeIndex) {
-      setActiveIndex(frontIndex);
-    }
-  });
-
-  // ── Mouse handlers ────────────────────────────────────────────────────────
-  const onMouseMove = useCallback((e: React.MouseEvent) => {
-    const rect = outerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const nx = (e.clientX - rect.left) / rect.width - 0.5;
-    const ny = (e.clientY - rect.top) / rect.height - 0.5;
-    parallaxTargetRef.current = { rx: ny * -3.5, ry: nx * 4.5 };
-  }, []);
-
-  const onMouseLeave = useCallback(() => {
-    parallaxTargetRef.current = { rx: 0, ry: 0 };
-    setIsHovered(false);
-  }, []);
-
-  // ── Pointer drag handlers ─────────────────────────────────────────────────
-  const onPointerDown = useCallback((e: React.PointerEvent) => {
-    if (snapAnim.current) snapAnim.current.stop();
-    setIsDragging(true);
-    dragStartX.current = e.clientX;
-    dragStartAngle.current = angleDeg.get();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  }, [angleDeg]);
-
-  const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (!isDragging) return;
-    const dx = e.clientX - dragStartX.current;
-    // Map drag distance to rotation: full column width = 280° rotation
-    angleDeg.set(dragStartAngle.current + (dx / dimensions.width) * 280);
-  }, [isDragging, dimensions.width, angleDeg]);
-
-  const onPointerUp = useCallback((e: React.PointerEvent) => {
-    if (!isDragging) return;
-    setIsDragging(false);
-    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    const cur = angleDeg.get();
-    const target = Math.round(cur / STEP) * STEP;
-    snapAnim.current = animate(angleDeg, target, {
-      type: "spring", stiffness: 130, damping: 20, mass: 1.1,
-    });
-  }, [isDragging, angleDeg]);
-
-  const onCardClick = useCallback((index: number) => {
-    if (isDragging) return;
-    if (snapAnim.current) snapAnim.current.stop();
-    const snapped = Math.round(angleDeg.get() / STEP) * STEP;
-    let diff = (index - activeIndex + COUNT) % COUNT;
-    if (diff > COUNT / 2) diff -= COUNT;
-    snapAnim.current = animate(angleDeg, snapped - diff * STEP, {
-      type: "spring", stiffness: 170, damping: 24,
-    });
-  }, [isDragging, angleDeg, activeIndex]);
-
-  const registerRefs = useCallback((index: number, refs: CardRefs) => {
-    cardRefsArray.current[index] = refs;
-  }, []);
-
-  // Height: scales with card height + a small breathing margin
-  const containerHeight = cardHeight + 32;
+  const activeItem = SHOWCASE_ITEMS[currentIndex];
 
   return (
-    /*
-     * LAYOUT CONTRACT:
-     *   - This div is w-full of the right column. It DOES NOT OVERFLOW its column.
-     *   - overflow: hidden clips individual cards that travel beyond the column edge.
-     *   - The CSS mask-image (on the inner perspective div) creates the soft edge
-     *     dissolve effect without any DOM bleed into the left column.
-     *   - Nothing here affects the Hero grid or flex layout.
-     */
-    <div
-      ref={outerRef}
-      className="relative w-full select-none"
-      style={{ height: containerHeight }}
-      onMouseMove={onMouseMove}
+    <div 
+      className="w-full max-w-[680px] flex flex-col items-center select-none"
       onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={onMouseLeave}
+      onMouseLeave={() => setIsHovered(false)}
     >
-      {/*
-       * Perspective root — fills outerRef exactly.
-       * mask-image creates the soft left/right edge dissolve.
-       * Cards that travel off-screen are masked, not clipped abruptly.
-       */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          perspective: "1200px",
-          perspectiveOrigin: "50% 48%",
-          // Soft edge fade: fully opaque from 14%–86%, dissolves at edges
-          WebkitMaskImage: "linear-gradient(to right, transparent 0%, black 14%, black 86%, transparent 100%)",
-          maskImage: "linear-gradient(to right, transparent 0%, black 14%, black 86%, transparent 100%)",
-          overflow: "hidden",
-        }}
-      >
-        {/*
-         * Stage — exactly the size of the perspective root (inset: 0).
-         * This is the ONLY element that receives the parallax tilt.
-         * Its transform is set per-frame by the parallax loop.
-         * It does NOT translate, scale, or otherwise move the container.
-         */}
-        <div
-          ref={stageRef}
-          style={{
-            position: "absolute",
-            inset: 0,
-            transformStyle: "preserve-3d",
-          }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          className="cursor-grab active:cursor-grabbing"
-        >
-          {/* Ambient orange depth bloom — purely decorative */}
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              inset: 0,
-              pointerEvents: "none",
-              background: "radial-gradient(ellipse 60% 55% at 50% 55%, rgba(235,69,17,0.04) 0%, transparent 70%)",
-            }}
-          />
-
-          {SHOWCASE_ITEMS.map((item, index) => (
-            <CarouselCard
+      {/* ── Feature Pills Navigation ────────────────────────────────────── */}
+      <div className="w-full mb-4 flex items-center justify-start sm:justify-center gap-1.5 overflow-x-auto pb-1.5 scrollbar-none no-scrollbar">
+        {SHOWCASE_ITEMS.map((item, idx) => {
+          const isActive = idx === currentIndex;
+          const Icon = item.icon;
+          return (
+            <button
               key={item.id}
-              index={index}
-              item={item}
-              cardWidth={cardWidth}
-              cardHeight={cardHeight}
-              onRegisterRefs={registerRefs}
-              onClick={() => onCardClick(index)}
-            />
-          ))}
+              onClick={() => goToSlide(idx)}
+              className={`relative px-2.5 py-1 rounded-full text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap transition-all duration-200 ${
+                isActive 
+                  ? "text-primary-foreground font-semibold shadow-sm" 
+                  : "text-muted-foreground hover:text-foreground hover:bg-white/5"
+              }`}
+            >
+              {isActive && (
+                <motion.div
+                  layoutId="activePill"
+                  className="absolute inset-0 rounded-full bg-primary"
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                />
+              )}
+              <span className="relative z-10 flex items-center gap-1">
+                <Icon className="w-3 h-3" />
+                {item.label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Dynamic 3-Card Carousel Track (Center Card + 2 Side Cards) ───── */}
+      <div className="relative w-full aspect-[16/10.2] min-h-[350px] sm:min-h-[380px] flex items-center justify-center overflow-hidden rounded-2xl py-2">
+        
+        {/* Soft Edge Fade to blend outer cards seamlessly */}
+        <div 
+          aria-hidden
+          className="absolute inset-0 pointer-events-none z-30"
+          style={{
+            background: "linear-gradient(to right, rgba(9,9,9,0.75) 0%, transparent 12%, transparent 88%, rgba(9,9,9,0.75) 100%)"
+          }}
+        />
+
+        {/* Ambient Orange Glow behind center active card */}
+        <div 
+          aria-hidden
+          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-3/4 h-3/4 rounded-full pointer-events-none opacity-35 blur-3xl"
+          style={{
+            background: "radial-gradient(circle, rgba(235,69,17,0.4) 0%, rgba(235,69,17,0.08) 60%, transparent 80%)",
+          }}
+        />
+
+        {/* Dynamic Cards Track */}
+        <div className="relative w-full h-full flex items-center justify-center">
+          {SHOWCASE_ITEMS.map((item, idx) => {
+            const offset = getCardOffset(idx, currentIndex, total);
+            const isCenter = offset === 0;
+            const isLeft = offset === -1;
+            const isRight = offset === 1;
+            const isVisible = Math.abs(offset) <= 1;
+
+            // Compute positions:
+            // Center: x = 0%, scale = 1, zIndex = 25
+            // Left: x = -66%, scale = 0.85, zIndex = 15
+            // Right: x = 66%, scale = 0.85, zIndex = 15
+            // Outside: offscreen with fade
+            let xPos = "0%";
+            let scale = 1;
+            let opacity = 1;
+            let zIndex = 25;
+
+            if (isCenter) {
+              xPos = "0%";
+              scale = 1;
+              opacity = 1;
+              zIndex = 25;
+            } else if (isLeft) {
+              xPos = "-66%";
+              scale = 0.85;
+              opacity = 0.55;
+              zIndex = 15;
+            } else if (isRight) {
+              xPos = "66%";
+              scale = 0.85;
+              opacity = 0.55;
+              zIndex = 15;
+            } else if (offset < -1) {
+              xPos = "-120%";
+              scale = 0.72;
+              opacity = 0;
+              zIndex = 5;
+            } else {
+              xPos = "120%";
+              scale = 0.72;
+              opacity = 0;
+              zIndex = 5;
+            }
+
+            return (
+              <motion.div
+                key={item.id}
+                initial={false}
+                animate={{
+                  x: xPos,
+                  scale,
+                  opacity,
+                  zIndex,
+                }}
+                transition={{
+                  x: { type: "spring", stiffness: 280, damping: 30 },
+                  scale: { type: "spring", stiffness: 280, damping: 30 },
+                  opacity: { duration: 0.3 },
+                  zIndex: { duration: 0 },
+                }}
+                onClick={() => {
+                  if (isLeft) handlePrev();
+                  if (isRight) handleNext();
+                }}
+                className={`absolute w-[76%] sm:w-[74%] h-full rounded-xl overflow-hidden shadow-2xl transition-shadow ${
+                  isCenter 
+                    ? "cursor-default shadow-[0_20px_60px_rgba(0,0,0,0.85),0_0_35px_rgba(235,69,17,0.12)] border border-white/12 ring-1 ring-white/10" 
+                    : "cursor-pointer border border-white/[0.06] hover:opacity-80"
+                }`}
+                style={{
+                  top: 0,
+                  willChange: "transform, opacity",
+                }}
+              >
+                {/* Dark dimming overlay on side peek cards */}
+                {!isCenter && (
+                  <div 
+                    aria-hidden
+                    className="absolute inset-0 z-20 bg-black/45 hover:bg-black/30 transition-colors"
+                  />
+                )}
+
+                {/* Card Content (Window Mockup) */}
+                <div className="w-full h-full pointer-events-none sm:pointer-events-auto">
+                  <CarouselWindow viewId={item.id} />
+                </div>
+              </motion.div>
+            );
+          })}
         </div>
+
+        {/* Floating Left/Right Arrow Overlays */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            handlePrev();
+          }}
+          aria-label="Previous slide"
+          className="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/70 hover:bg-black/95 border border-white/15 hover:border-primary/60 text-white/80 hover:text-primary flex items-center justify-center backdrop-blur-md transition-all duration-200 z-40 shadow-xl group"
+        >
+          <ChevronLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+        </button>
+
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            handleNext();
+          }}
+          aria-label="Next slide"
+          className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/70 hover:bg-black/95 border border-white/15 hover:border-primary/60 text-white/80 hover:text-primary flex items-center justify-center backdrop-blur-md transition-all duration-200 z-40 shadow-xl group"
+        >
+          <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+        </button>
+
       </div>
+
+      {/* ── Reference-style Navigation Dots (Elongated active pill + round dots) ── */}
+      <div className="flex items-center justify-center gap-1.5 mt-4">
+        {SHOWCASE_ITEMS.map((_, dotIdx) => {
+          const isActive = dotIdx === currentIndex;
+          return (
+            <button
+              key={dotIdx}
+              onClick={() => goToSlide(dotIdx)}
+              aria-label={`Go to slide ${dotIdx + 1}`}
+              className="relative py-1 px-0.5 focus:outline-none"
+            >
+              {isActive ? (
+                <motion.div
+                  layoutId="referenceActiveDot"
+                  className="w-7 h-2 rounded-full bg-primary shadow-[0_0_10px_rgba(235,69,17,0.6)]"
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                />
+              ) : (
+                <div className="w-2 h-2 rounded-full bg-white/20 hover:bg-white/40 transition-colors" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Slide Info & Subtitle ────────────────────────────────────────── */}
+      <div className="w-full mt-2.5 px-2 flex items-center justify-between text-xs">
+        
+        {/* Slide Counter & Title */}
+        <div className="flex items-center gap-2 text-muted-foreground truncate">
+          <span className="font-mono text-[10px] font-bold text-primary bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded">
+            {String(currentIndex + 1).padStart(2, "0")}/{String(total).padStart(2, "0")}
+          </span>
+          <span className="font-semibold text-foreground text-[11px] truncate">
+            {activeItem.title}
+          </span>
+          <span className="hidden sm:inline-block text-[10px] text-muted-foreground/70 truncate">
+            • {activeItem.subtitle}
+          </span>
+        </div>
+
+        {/* Play/Pause Control */}
+        <button
+          onClick={() => setIsPlaying(!isPlaying)}
+          aria-label={isPlaying ? "Pause slideshow" : "Play slideshow"}
+          className="w-6 h-6 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors shrink-0"
+          title={isPlaying ? "Pause auto-advance" : "Resume auto-advance"}
+        >
+          {isPlaying ? (
+            <Pause className="w-3 h-3 text-primary" />
+          ) : (
+            <Play className="w-3 h-3" />
+          )}
+        </button>
+
+      </div>
+
+      {/* Progress Bar (indicates autoplay timing) */}
+      {isPlaying && !isHovered && (
+        <div className="w-full h-0.5 bg-white/5 rounded-full overflow-hidden mt-2">
+          <motion.div
+            key={currentIndex}
+            initial={{ width: "0%" }}
+            animate={{ width: "100%" }}
+            transition={{ duration: AUTOPLAY_DELAY / 1000, ease: "linear" }}
+            className="h-full bg-primary/70"
+          />
+        </div>
+      )}
     </div>
   );
 }
-
-// ─── CarouselCard ─────────────────────────────────────────────────────────────
-interface CarouselCardProps {
-  index: number;
-  item: { id: string; title: string };
-  cardWidth: number;
-  cardHeight: number;
-  onRegisterRefs: (index: number, refs: CardRefs) => void;
-  onClick: () => void;
-}
-
-const CarouselCard = memo(function CarouselCard({
-  index, item, cardWidth, cardHeight, onRegisterRefs, onClick,
-}: CarouselCardProps) {
-  const cardRef = useRef<HTMLDivElement>(null);
-  const glowRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    onRegisterRefs(index, { card: cardRef.current, glow: glowRef.current });
-  }, [index, onRegisterRefs]);
-
-  return (
-    <div
-      ref={cardRef}
-      className="absolute rounded-xl"
-      style={{
-        width: cardWidth,
-        height: cardHeight,
-        // Center the card at the stage's 50%/50% point.
-        // All translateX/Y/Z in the animation moves relative to this center.
-        left: "50%",
-        top: "50%",
-        marginLeft: -(cardWidth / 2),
-        marginTop: -(cardHeight / 2),
-        transformStyle: "preserve-3d",
-        willChange: "transform, opacity",
-        opacity: 0, // avoid first-frame flash before RAF runs
-      }}
-      onClick={onClick}
-    >
-      {/* Orange ambient glow — only visible on the front card */}
-      <div
-        ref={glowRef}
-        aria-hidden
-        style={{
-          position: "absolute",
-          inset: "-28px",
-          borderRadius: "inherit",
-          opacity: 0,
-          pointerEvents: "none",
-          background: "radial-gradient(ellipse 85% 75% at 50% 58%, rgba(235,69,17,0.22) 0%, rgba(235,69,17,0.06) 50%, transparent 70%)",
-          filter: "blur(22px)",
-        }}
-      />
-
-      {/* Card face — static shadow to eliminate per-frame paint */}
-      <div
-        className="w-full h-full relative rounded-xl overflow-hidden flex flex-col"
-        style={{
-          border: "1px solid rgba(255,255,255,0.07)",
-          background: "rgba(18,18,18,0.94)",
-          boxShadow: "0 24px 64px rgba(0,0,0,0.75), 0 4px 16px rgba(0,0,0,0.4)",
-        }}
-      >
-        <CarouselWindow viewId={item.id} />
-
-        {/* Diagonal glass sheen */}
-        <div
-          aria-hidden
-          className="absolute inset-0 pointer-events-none"
-          style={{ background: "linear-gradient(135deg, transparent 55%, rgba(255,255,255,0.03) 100%)" }}
-        />
-        {/* Top-edge specular highlight */}
-        <div
-          aria-hidden
-          className="absolute top-0 left-0 right-0 pointer-events-none"
-          style={{ height: "1px", background: "linear-gradient(to right, transparent, rgba(255,255,255,0.16), transparent)" }}
-        />
-      </div>
-    </div>
-  );
-});
